@@ -43,23 +43,6 @@ const C = {
   green:   "#3FA86A",
 };
 
-// Olympic plate colour coding (kg system, reused loosely for lb)
-const PLATES = {
-  kg: [
-    { v: 2.5, color: "#C9C4B4", text: "#1b1a14" },
-    { v: 5,   color: "#E6E1D3", text: "#1b1a14" },
-    { v: 10,  color: C.green,   text: "#fff" },
-    { v: 20,  color: "#2E6BD6", text: "#fff" },
-    { v: 25,  color: C.red,     text: "#fff" },
-  ],
-  lb: [
-    { v: 5,   color: "#E6E1D3", text: "#1b1a14" },
-    { v: 10,  color: C.green,   text: "#fff" },
-    { v: 25,  color: C.red,     text: "#fff" },
-    { v: 45,  color: "#2E6BD6", text: "#fff" },
-  ],
-};
-
 const STEP = { kg: 2.5, lb: 5 };
 const FINE = { kg: 0.1, lb: 0.1 };
 const KG2LB = 2.20462;
@@ -206,10 +189,12 @@ async function writeStore(payload) {
 
 /* ============================================================ */
 function IronLog() {
-  const [data, setData] = useState({ unit: "kg", workouts: {}, custom: [], restDays: {}, bodyweight: null, freezeDays: {} });
+  const [data, setData] = useState({ unit: "kg", workouts: {}, custom: [], restDays: {}, bodyweight: null, freezeDays: {}, templates: [], drops: {} });
   const [loaded, setLoaded] = useState(false);
   const [view, setView] = useState("log"); // log | week | progress | cabinet
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [workoutsOpen, setWorkoutsOpen] = useState(false);
+  const [dropReveal, setDropReveal] = useState(null); // relic id just dropped
   const [rest, setRest] = useState(null); // { seconds, total }
   const [progId, setProgId] = useState(null);
   const [shareDay, setShareDay] = useState(null); // ISO date for the session share card
@@ -333,6 +318,66 @@ function IronLog() {
   const deleteCustom = (id) =>
     setData((p) => ({ ...p, custom: (p.custom || []).filter((c) => c.id !== id) }));
 
+  // ---- Workout templates ----
+  const saveTemplate = (tid, name, items) =>
+    setData((p) => {
+      const t = { id: tid || "t_" + uid(), name: name.trim(), items };
+      const arr = [...(p.templates || [])];
+      const i = arr.findIndex((x) => x.id === t.id);
+      if (i >= 0) arr[i] = t; else arr.push(t);
+      return { ...p, templates: arr };
+    });
+
+  const deleteTemplate = (tid) =>
+    setData((p) => ({ ...p, templates: (p.templates || []).filter((t) => t.id !== tid) }));
+
+  // One tap at the gym: load every exercise in the workout. Each one prefills
+  // from your last session of that lift if there is one, otherwise opens the
+  // template's planned number of blank sets.
+  const startWorkout = (t) => {
+    mutateDay((day) => {
+      t.items.forEach((item) => {
+        const uniFlag = !!item.uni;
+        const prefill = lastSetsFor(item.id);
+        const sets = prefill
+          ? prefill
+          : Array.from({ length: Math.max(1, item.sets || 1) }, () => ({ weight: 0, reps: 0, unit, done: false, warmup: false, side: uniFlag ? "B" : null }));
+        day.exercises = [
+          ...day.exercises,
+          { uid: uid(), id: item.id, name: item.name, category: item.category, unilateral: uniFlag, sets, fromLast: !!prefill },
+        ];
+      });
+    });
+    setWorkoutsOpen(false);
+  };
+
+  // ---- Forge drops ----
+  // Rolled exactly once per session date, only when the session is finished
+  // and only if it holds real work. The result is stored, so it survives
+  // backups and can never be re-rolled by refreshing.
+  const maybeRollDrop = (dateIso) => {
+    const drops = data.drops || {};
+    if (drops[dateIso] !== undefined) return null;                 // already rolled this day
+    const day = data.workouts[dateIso];
+    if (!day) return null;
+    const workSets = day.exercises.reduce((a, e) => a + e.sets.filter((s) => s.done && !s.warmup).length, 0);
+    if (workSets < DROP_MIN_SETS) return null;                     // token sessions don't roll
+    const ds = Object.keys(drops).sort();
+    let misses = 0;
+    for (let i = ds.length - 1; i >= 0; i--) { if (drops[ds[i]]) break; misses++; }
+    const hit = misses >= PITY_AT - 1 || Math.random() < DROP_CHANCE;
+    const relic = hit ? rollRelic() : "";
+    setData((p) => ({ ...p, drops: { ...(p.drops || {}), [dateIso]: relic } }));
+    return hit ? relic : null;
+  };
+
+  const finishSession = () => {
+    flushSave();
+    const relic = maybeRollDrop(logDate);
+    if (relic) setDropReveal(relic);
+    else setShareDay(logDate);
+  };
+
   const updateEx = (exUid, fn) =>
     mutateDay((day) => {
       day.exercises = day.exercises.map((e) => {
@@ -372,9 +417,12 @@ function IronLog() {
     setData(p => ({ ...p, freezeDays: { ...(p.freezeDays || {}), [today]: true } }));
   };
 
-  const restMarked = !!(data.restDays && data.restDays[today]);
-  const markRestDay = () => setData((p) => ({ ...p, restDays: { ...(p.restDays || {}), [today]: true } }));
-  const clearRestDay = () => setData((p) => { const r = { ...(p.restDays || {}) }; delete r[today]; return { ...p, restDays: r }; });
+  // Rest/travel marking follows the date being viewed, so missed days can be
+  // repaired from the date navigator.
+  const restMarked = !!(data.restDays && data.restDays[logDate]);
+  const restKind = (data.restDays && data.restDays[logDate]) === "travel" ? "travel" : "rest";
+  const markRestDay = (kind) => setData((p) => ({ ...p, restDays: { ...(p.restDays || {}), [logDate]: kind === "travel" ? "travel" : true } }));
+  const clearRestDay = () => setData((p) => { const r = { ...(p.restDays || {}) }; delete r[logDate]; return { ...p, restDays: r }; });
   const setBodyweight = (kg) => setData((p) => ({ ...p, bodyweight: kg }));
   const importData = (obj) => setData({
     unit: obj.unit === "lb" ? "lb" : "kg",
@@ -383,6 +431,8 @@ function IronLog() {
     restDays: obj.restDays && typeof obj.restDays === "object" ? obj.restDays : {},
     bodyweight: typeof obj.bodyweight === "number" ? obj.bodyweight : null,
     freezeDays: obj.freezeDays && typeof obj.freezeDays === "object" ? obj.freezeDays : {},
+    templates: Array.isArray(obj.templates) ? obj.templates : [],
+    drops: obj.drops && typeof obj.drops === "object" ? obj.drops : {},
   });
 
   // recent exercise ids across history, newest first
@@ -437,13 +487,16 @@ function IronLog() {
             dayTime={data.workouts[logDate]?.time || ""}
             onChangeTime={setDayTime}
             restMarked={restMarked}
+            restKind={restKind}
             onRest={markRestDay}
             onUndoRest={clearRestDay}
             onAdd={() => setPickerOpen(true)}
+            onOpenWorkouts={() => setWorkoutsOpen(true)}
+            hasTemplates={(data.templates || []).length > 0}
             updateEx={updateEx}
             removeEx={removeEx}
             startRest={(s) => setRest({ seconds: s, total: s })}
-            onShare={() => { flushSave(); setShareDay(logDate); }}
+            onShare={finishSession}
             freezeAvail={freezeAvail}
             onFreeze={useFreeze}
           />
@@ -460,6 +513,25 @@ function IronLog() {
           />
         )}
       </main>
+
+      {dropReveal && (
+        <DropReveal
+          relicId={dropReveal}
+          onClose={() => { setDropReveal(null); setShareDay(logDate); }}
+        />
+      )}
+
+      {workoutsOpen && (
+        <WorkoutsModal
+          templates={data.templates || []}
+          lib={lib}
+          todayExercises={data.workouts[logDate]?.exercises || []}
+          onStart={startWorkout}
+          onSave={saveTemplate}
+          onDelete={deleteTemplate}
+          onClose={() => setWorkoutsOpen(false)}
+        />
+      )}
 
       {pickerOpen && (
         <Picker
@@ -508,7 +580,7 @@ function IronLog() {
 }
 
 /* ---------------- Log view ---------------- */
-function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logDate, onChangeDate, dayTime, onChangeTime, restMarked, onRest, onUndoRest, onAdd, updateEx, removeEx, startRest, onShare, freezeAvail, onFreeze }) {
+function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logDate, onChangeDate, dayTime, onChangeTime, restMarked, restKind, onRest, onUndoRest, onAdd, onOpenWorkouts, hasTemplates, updateEx, removeEx, startRest, onShare, freezeAvail, onFreeze }) {
   const isWork = (s) => s.done && !s.warmup;
   const isBackdate = logDate !== today;
   const timeLabel = dayTime ? fmtTime(dayTime) : (isBackdate ? "Add session time" : "Set time");
@@ -521,7 +593,7 @@ function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logD
 
   return (
     <div>
-      <DailyCard data={data} unit={unit} today={today} restMarked={restMarked} onRest={onRest} onUndoRest={onUndoRest} loggedToday={(todayExercises || []).some((e) => e.sets.some(isWorkDone))} freezeAvail={freezeAvail} onFreeze={onFreeze} />
+      <DailyCard data={data} unit={unit} today={today} viewDate={logDate} dayLogged={(exercises || []).some((e) => e.sets.some(isWorkDone))} restMarked={restMarked} restKind={restKind} onRest={onRest} onUndoRest={onUndoRest} loggedToday={(todayExercises || []).some((e) => e.sets.some(isWorkDone))} freezeAvail={freezeAvail} onFreeze={onFreeze} />
 
       <div style={S.dateRow}>
         <div>
@@ -586,6 +658,7 @@ function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logD
             key={ex.uid}
             ex={ex}
             unit={unit}
+            rec={overloadFor(data, ex.id, ex.category, logDate, unit)}
             update={(fn) => updateEx(ex.uid, fn)}
             remove={() => removeEx(ex.uid)}
             startRest={startRest}
@@ -595,6 +668,9 @@ function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logD
 
       <button style={S.addBtn} onClick={onAdd}>
         <span style={{ fontSize: 20, lineHeight: 1 }}>+</span> Add exercise
+      </button>
+      <button style={S.workoutBtn} onClick={onOpenWorkouts}>
+        <span style={{ fontSize: 15, lineHeight: 1 }}>▶</span> {hasTemplates ? "Start a workout" : "Create a workout"}
       </button>
 
       {totalSets > 0 && (
@@ -607,10 +683,20 @@ function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logD
 }
 
 /* ---------------- Exercise card ---------------- */
-function ExerciseCard({ ex, unit, update, remove, startRest }) {
+function ExerciseCard({ ex, unit, rec, update, remove, startRest }) {
   const [active, setActive] = useState(ex.sets.length - 1);
-  const plates = PLATES[unit];
+  const [recApplied, setRecApplied] = useState(false);
   const step = STEP[unit];
+
+  const applyRec = () => {
+    if (!rec) return;
+    update((e) => {
+      e.sets.forEach((s) => {
+        if (!s.done && !s.warmup) { s.weight = Math.max(0, r1(rec.weight)); s.unit = unit; }
+      });
+    });
+    setRecApplied(true);
+  };
 
   const setWeight = (i, w) =>
     update((e) => { e.sets[i].weight = Math.max(0, r1(w)); e.sets[i].unit = unit; });
@@ -661,6 +747,17 @@ function ExerciseCard({ ex, unit, update, remove, startRest }) {
             {ex.category}
             {ex.fromLast && <span style={S.lastTag}>· prefilled from last time</span>}
           </div>
+          {rec && (
+            recApplied ? (
+              <div style={S.recChipDone}>🎯 Target set — {rec.reps}{rec.mode === "reps" ? `–${rec.hi}` : "+"} reps at {rec.weight} {unit}</div>
+            ) : (
+              <button style={S.recChip} onClick={applyRec}>
+                🎯 {rec.mode === "load"
+                  ? `Step up: ${rec.weight} ${unit} × ${rec.reps} — you earned it`
+                  : `Beat last time: ${rec.weight} ${unit} × ${rec.reps}+`}
+              </button>
+            )
+          )}
         </div>
         <div style={S.cardHeadBtns}>
           <button
@@ -761,22 +858,255 @@ function ExerciseCard({ ex, unit, update, remove, startRest }) {
                 <button style={S.fineBtn} onClick={() => setWeight(i, inUnit(s, unit) + fine)}>+{fine}</button>
                 <span style={S.fineHint}>{unit}</span>
               </div>
-              <div style={S.plateBar}>
-                <span style={S.plateLabel}>load</span>
-                {plates.map((p) => (
-                  <button
-                    key={p.v}
-                    style={{ ...S.plate, background: p.color, color: p.text }}
-                    onClick={() => setWeight(i, inUnit(s, unit) + p.v)}
-                  >+{p.v}</button>
-                ))}
-              </div>
             </div>
           )}
         </div>
       ))}
 
       <button style={S.addSet} onClick={addSet}>+ add set</button>
+    </div>
+  );
+}
+
+/* ---------------- Limited-edition monthly badges ---------------- */
+function MonthBadges({ data, unit, today }) {
+  const months = badgeMonths(data, today);
+  if (!months.length) return null;
+  const cur = today.slice(0, 7);
+  const rows = months.map((ym) => {
+    const b = monthBadgeFor(ym);
+    const ms = monthStats(data, ym);
+    const v = b.val(ms);
+    return { ym, b, v, got: v >= b.target, live: ym === cur };
+  }).reverse();
+  const live = rows.find((r) => r.live);
+  const past = rows.filter((r) => !r.live);
+  const earnedN = rows.filter((r) => r.got).length;
+  const [y, m] = cur.split("-").map(Number);
+  const daysLeft = new Date(y, m, 0).getDate() - Number(today.slice(8, 10));
+  const showVal = (r) => (r.b.kg ? fmt(unit === "kg" ? r.v : r.v * KG2LB) : r.v.toLocaleString());
+  const showTgt = (r) => (r.b.kg ? `${fmt(unit === "kg" ? r.b.target : r.b.target * KG2LB)} ${unit}` : r.b.target.toLocaleString());
+  const monthLabel = (ym) => { const [yy, mm] = ym.split("-").map(Number); return `${MO[mm - 1]} ${yy}`; };
+
+  return (
+    <>
+      <div style={S.cabSect}>Limited editions <span style={S.cabCount}>{earnedN} / {rows.length} · one per month, then gone</span></div>
+      {live && (
+        <div style={{ ...S.trophy, ...(live.got ? S.trophyOn : S.mbLive), textAlign: "left", marginBottom: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 24 }}>{live.b.icon}</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={S.trophyName}>{live.b.title} <span style={S.mbTag}>{monthLabel(live.ym)} edition</span></div>
+              <div style={S.trophySub}>{live.b.sub}</div>
+            </div>
+          </div>
+          {live.got ? (
+            <div style={{ ...S.trophySub, color: C.green, marginTop: 8 }}>Earned ✓ — it's yours forever</div>
+          ) : live.b.key === "cats" ? (
+            <div style={{ ...S.trophySub, marginTop: 8 }}>{daysLeft} day{daysLeft === 1 ? "" : "s"} left — miss it and this one's gone</div>
+          ) : (
+            <>
+              <div style={S.trophyBar}><div style={{ ...S.trophyBarFill, width: Math.min(100, Math.round((live.v / live.b.target) * 100)) + "%" }} /></div>
+              <div style={S.trophySub}>{showVal(live)} / {showTgt(live)} · {daysLeft} day{daysLeft === 1 ? "" : "s"} left — then it's gone</div>
+            </>
+          )}
+        </div>
+      )}
+      {past.length > 0 && (
+        <div style={S.trophyGrid}>
+          {past.map((r) => (
+            <div key={r.ym} style={{ ...S.trophy, ...(r.got ? S.trophyOn : S.mbMissed) }}>
+              <div style={S.trophyIcon}>{r.got ? r.b.icon : "⌛"}</div>
+              <div style={S.trophyName}>{r.b.title}</div>
+              <div style={S.mbTag}>{monthLabel(r.ym)}</div>
+              {r.got
+                ? <div style={{ ...S.trophySub, color: C.green }}>Earned ✓</div>
+                : <div style={S.trophyLocked}>Missed — gone</div>}
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ---------------- Forge drops ---------------- */
+function DropReveal({ relicId, onClose }) {
+  const relic = RELICS.find((r) => r.id === relicId);
+  if (!relic) return null;
+  const rar = RARITY[relic.rarity];
+  return (
+    <div style={S.sheetBackdrop} onClick={onClose}>
+      <div style={{ ...S.dropCard, borderColor: rar.color }} onClick={(e) => e.stopPropagation()}>
+        <div style={S.dropEyebrow}>⚒ Forge drop</div>
+        <div style={S.dropIcon}>{relic.icon}</div>
+        <div style={S.dropName}>{relic.name}</div>
+        <div style={{ ...S.dropRarity, color: rar.color, borderColor: rar.color }}>{rar.label}</div>
+        <div style={S.dropLore}>{relic.lore}</div>
+        <button style={S.dropBtn} onClick={onClose}>Add to shelf →</button>
+      </div>
+    </div>
+  );
+}
+
+function RelicShelf({ data }) {
+  const drops = data.drops || {};
+  const counts = {};
+  Object.values(drops).forEach((id) => { if (id) counts[id] = (counts[id] || 0) + 1; });
+  const ownedKinds = Object.keys(counts).length;
+  if (Object.keys(drops).length === 0) return null;   // nothing rolled yet — keep the mystery
+  return (
+    <>
+      <div style={S.cabSect}>Relic shelf <span style={S.cabCount}>{ownedKinds} / {RELICS.length} · the forge rewards finished work</span></div>
+      <div style={S.relicGrid}>
+        {RELICS.map((r) => {
+          const n = counts[r.id] || 0;
+          const rar = RARITY[r.rarity];
+          return (
+            <div key={r.id} style={{ ...S.trophy, ...(n > 0 ? { ...S.trophyOn, borderColor: rar.color } : {}) }}>
+              <div style={S.trophyIcon}>{n > 0 ? r.icon : "❔"}</div>
+              <div style={S.trophyName}>{n > 0 ? r.name : "???"}</div>
+              {n > 0 ? (
+                <>
+                  <div style={{ ...S.relicRarity, color: rar.color }}>{rar.label}{n > 1 ? ` · ×${n}` : ""}</div>
+                  <div style={S.trophySub}>{r.lore}</div>
+                </>
+              ) : (
+                <div style={S.trophyLocked}>Undiscovered</div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+/* ---------------- Workout templates ---------------- */
+function WorkoutsModal({ templates, lib, todayExercises, onStart, onSave, onDelete, onClose }) {
+  const [mode, setMode] = useState("list");   // "list" | "build"
+  const [editId, setEditId] = useState(null);
+  const [name, setName] = useState("");
+  const [items, setItems] = useState([]);     // { id, name, category, uni, sets }
+  const [q, setQ] = useState("");
+
+  const startNew = () => { setEditId(null); setName(""); setItems([]); setQ(""); setMode("build"); };
+  const startEdit = (t) => { setEditId(t.id); setName(t.name); setItems(t.items.map((i) => ({ ...i }))); setQ(""); setMode("build"); };
+  const saveTodayAs = () => {
+    const its = todayExercises.map((e) => ({ id: e.id, name: e.name, category: e.category, uni: !!e.unilateral, sets: Math.max(1, e.sets.length) }));
+    setEditId(null); setName(""); setItems(its); setQ(""); setMode("build");
+  };
+
+  const chosen = new Set(items.map((i) => i.id));
+  const toggle = (e) =>
+    setItems((p) =>
+      p.some((i) => i.id === e.id)
+        ? p.filter((i) => i.id !== e.id)
+        : [...p, { id: e.id, name: e.name, category: e.category, uni: !!(e.uni || e.unilateral), sets: 3 }]
+    );
+  const bump = (id, d) =>
+    setItems((p) => p.map((i) => (i.id === id ? { ...i, sets: Math.max(1, Math.min(10, (i.sets || 3) + d)) } : i)));
+
+  const canSave = name.trim().length > 0 && items.length > 0;
+  const term = q.trim().toLowerCase();
+  const filtered = term ? lib.filter((e) => e.name.toLowerCase().includes(term)) : null;
+
+  return (
+    <div style={S.sheetBackdrop} onClick={onClose}>
+      <div style={S.sheet} onClick={(e) => e.stopPropagation()}>
+        <div style={S.sheetGrip} />
+        <div style={S.sheetHead}>
+          <span style={S.sheetTitle}>{mode === "build" ? (editId ? "Edit workout" : "New workout") : "Workouts"}</span>
+          <button style={S.iconBtn} onClick={mode === "build" ? () => setMode("list") : onClose}>✕</button>
+        </div>
+
+        {mode === "list" ? (
+          <div style={S.sheetScroll}>
+            {templates.length === 0 && (
+              <div style={S.wkEmpty}>Build a workout once — start it with one tap at the gym.</div>
+            )}
+            {templates.map((t) => (
+              <div key={t.id} style={S.wkRow}>
+                <button style={S.wkStart} onClick={() => onStart(t)}>
+                  <span style={S.wkName}>{t.name}</span>
+                  <span style={S.wkMeta}>{t.items.length} exercise{t.items.length === 1 ? "" : "s"} · {t.items.reduce((a, i) => a + (i.sets || 0), 0)} sets</span>
+                </button>
+                <button style={S.wkEdit} onClick={() => startEdit(t)} aria-label={"Edit " + t.name}>✎</button>
+              </div>
+            ))}
+            <button style={S.createRow} onClick={startNew}>
+              <span style={S.pickPlus}>+</span><span>New workout</span>
+            </button>
+            {todayExercises.length > 0 && (
+              <button style={S.createRow} onClick={saveTodayAs}>
+                <span style={S.pickPlus}>★</span><span>Save today's session as a workout</span>
+              </button>
+            )}
+          </div>
+        ) : (
+          <>
+            <input
+              style={S.search}
+              placeholder="Workout name — e.g. Push Day A"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+            <div style={S.sheetScroll}>
+              {items.length > 0 && (
+                <section>
+                  <div style={S.catLabel}>In this workout — sets each</div>
+                  {items.map((i) => (
+                    <div key={i.id} style={S.wkSelRow}>
+                      <button style={S.wkRemove} onClick={() => setItems((p) => p.filter((x) => x.id !== i.id))}>✕</button>
+                      <span style={S.wkSelName}>{i.name}</span>
+                      <button style={S.fineBtn} onClick={() => bump(i.id, -1)}>−</button>
+                      <span style={S.wkSetNum}>{i.sets}</span>
+                      <button style={S.fineBtn} onClick={() => bump(i.id, 1)}>+</button>
+                    </div>
+                  ))}
+                </section>
+              )}
+              <input
+                style={{ ...S.search, marginTop: 10 }}
+                placeholder="Search exercises to add…"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+              />
+              {filtered ? (
+                filtered.map((e) => (
+                  <button key={e.id} style={{ ...S.wkLibRow, ...(chosen.has(e.id) ? S.wkLibOn : {}) }} onClick={() => toggle(e)}>
+                    <span>{e.name}</span>
+                    <span style={S.pickCat}>{chosen.has(e.id) ? "✓ added" : e.category}</span>
+                  </button>
+                ))
+              ) : (
+                CATS.map((cat) => (
+                  <section key={cat}>
+                    <div style={S.catLabel}>{cat}</div>
+                    {lib.filter((e) => e.category === cat).map((e) => (
+                      <button key={e.id} style={{ ...S.wkLibRow, ...(chosen.has(e.id) ? S.wkLibOn : {}) }} onClick={() => toggle(e)}>
+                        <span>{e.name}</span>
+                        <span style={S.pickCat}>{chosen.has(e.id) ? "✓" : ""}</span>
+                      </button>
+                    ))}
+                  </section>
+                ))
+              )}
+            </div>
+            <div style={S.wkFoot}>
+              {editId && (
+                <button style={S.wkDelete} onClick={() => { onDelete(editId); setMode("list"); }}>Delete</button>
+              )}
+              <button
+                style={{ ...S.wkSave, ...(canSave ? {} : { opacity: 0.45, cursor: "default" }) }}
+                onClick={() => { if (canSave) { onSave(editId, name, items); setMode("list"); } }}
+              >
+                {editId ? "Save changes" : "Save workout"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -1274,6 +1604,105 @@ function lifetimeTier(volKg) {
     if (volKg >= TIERS[i].kg) { cur = TIERS[i]; next = TIERS[i + 1] || null; }
   }
   return { cur, next };
+}
+
+// CD7 — unpredictability, wrapped around finished work only. A drop can only
+// roll when a real session is completed — never on opening the app.
+const RARITY = {
+  common:    { w: 60,   label: "Common",    color: "#9a948a" },
+  uncommon:  { w: 28,   label: "Uncommon",  color: "#5fae6e" },
+  rare:      { w: 10.5, label: "Rare",      color: "#5b8fe0" },
+  legendary: { w: 1.5,  label: "Legendary", color: "#e0a33c" },
+};
+const RELICS = [
+  { id: "millscale",   name: "Mill Scale",           rarity: "common",    icon: "⚙️", lore: "Flakes off every honest bar. Proof of contact." },
+  { id: "slagglass",   name: "Slag Glass",           rarity: "common",    icon: "🟫", lore: "What the fire didn't want. Still yours." },
+  { id: "filings",     name: "Iron Filings",         rarity: "common",    icon: "🧲", lore: "Small work. It adds up — that's the whole point." },
+  { id: "chalk",       name: "Lifter's Chalk",       rarity: "common",    icon: "🪨", lore: "Grip the day. Leave a mark." },
+  { id: "horseshoe",   name: "Bent Horseshoe",       rarity: "common",    icon: "🧷", lore: "Luck is just showing up more times than you miss." },
+  { id: "anvilshard",  name: "Anvil Shard",          rarity: "uncommon",  icon: "🔩", lore: "Broke off something that refused to move. Respect." },
+  { id: "quenchstone", name: "Quench Stone",         rarity: "uncommon",  icon: "🌑", lore: "Cooled a thousand blades. Rest is part of the forging." },
+  { id: "tongs",       name: "Smith's Tongs",        rarity: "uncommon",  icon: "🗜️", lore: "Hold the hard thing steady. Then strike." },
+  { id: "emberjar",    name: "Ember Jar",            rarity: "uncommon",  icon: "🏺", lore: "Carries yesterday's fire to tomorrow's work." },
+  { id: "meteoriron",  name: "Meteor Iron",          rarity: "rare",      icon: "☄️", lore: "Fell from somewhere better. Forged into something stronger." },
+  { id: "damascus",    name: "Damascus Fragment",    rarity: "rare",      icon: "🌊", lore: "A thousand folds. Every layer a session no one saw." },
+  { id: "founder",     name: "The Founder's Ember",  rarity: "legendary", icon: "🔥", lore: "The first fire never went out. It was handed down." },
+];
+function rollRelic() {
+  const total = Object.values(RARITY).reduce((a, r) => a + r.w, 0);
+  let roll = Math.random() * total;
+  let tier = "common";
+  for (const [k, r] of Object.entries(RARITY)) { roll -= r.w; if (roll <= 0) { tier = k; break; } }
+  const pool = RELICS.filter((r) => r.rarity === tier);
+  return pool[Math.floor(Math.random() * pool.length)].id;
+}
+const DROP_CHANCE = 0.22;   // ≈ one drop every 4–5 finished sessions
+const DROP_MIN_SETS = 10;   // a real session, not a token one
+const PITY_AT = 8;          // the 8th dry session in a row guarantees a drop
+
+// Progressive overload targets — double progression, tuned by exercise type.
+// Lower-body compounds live in a 5–8 rep window with a load bias; upper-body
+// compounds in 6–10; isolation work in 8–12 with a reps-first bias. Fill the
+// window across your working sets and the target steps the load up ~2.5–5%
+// (never less than the smallest real plate step) and resets to the bottom of
+// the window. Until then, the target is one more rep at the same weight.
+const OVERLOAD_WINDOWS = {
+  Legs: [5, 8], Olympic: [5, 8],
+  Chest: [6, 10], Back: [6, 10], Shoulders: [6, 10],
+};
+function overloadFor(data, exId, category, beforeDate, unit) {
+  const cutoff = addDaysISO(beforeDate, -21);
+  const dates = Object.keys(data.workouts).filter((d) => d < beforeDate && d >= cutoff).sort().reverse();
+  let found = null;
+  for (const d of dates) {
+    const e = data.workouts[d].exercises.find((x) => x.id === exId && x.sets.some((s) => s.done && !s.warmup && (s.reps || 0) > 0));
+    if (e) { found = e; break; }
+  }
+  if (!found) return null;
+  const work = found.sets.filter((s) => s.done && !s.warmup && (s.reps || 0) > 0);
+  const [lo, hi] = OVERLOAD_WINDOWS[category] || [8, 12];
+  const topW = Math.max(...work.map((s) => inUnit(s, unit)));
+  if (topW <= 0) return null;                       // bodyweight-style logging — no load target
+  const atTop = work.filter((s) => inUnit(s, unit) === topW);
+  const minReps = Math.min(...atTop.map((s) => s.reps || 0));
+  const step = STEP[unit];
+  if (minReps >= hi) {
+    const inc = Math.max(step, Math.ceil((topW * 0.025) / step) * step);
+    return { mode: "load", weight: r1(topW + inc), reps: lo, hi, prevW: topW, prevR: minReps };
+  }
+  return { mode: "reps", weight: r1(topW), reps: Math.min(hi, minReps + 1), hi, prevW: topW, prevR: minReps };
+}
+
+// CD6 — scarcity. One limited-edition badge per calendar month. Earn it inside
+// the month or it is gone for good — the cabinet keeps the gap.
+const MONTH_BADGE_POOL = [
+  { key: "vol",  icon: "🏗", title: "The Haul",        sub: "Move 25,000 kg inside the month",        target: 25000, val: (ms) => ms.volKg, kg: true },
+  { key: "sess", icon: "📅", title: "Ever-Present",    sub: "Train on 14 days of the month",          target: 14,    val: (ms) => ms.sessions },
+  { key: "prs",  icon: "🏅", title: "Record Season",   sub: "Set 3 PRs inside the month",             target: 3,     val: (ms) => ms.prs },
+  { key: "sets", icon: "🧱", title: "Brick by Brick",  sub: "Log 200 working sets in the month",      target: 200,   val: (ms) => ms.sets },
+  { key: "reps", icon: "🔢", title: "Thousand Club",   sub: "Grind out 1,500 reps in the month",      target: 1500,  val: (ms) => ms.reps },
+  { key: "cats", icon: "🧭", title: "The Generalist",  sub: "Hit 5 muscle groups across 10 sessions", target: 1,     val: (ms) => (ms.cats >= 5 && ms.sessions >= 10 ? 1 : 0) },
+];
+function monthBadgeFor(ym) {
+  const [y, m] = ym.split("-").map(Number);
+  return MONTH_BADGE_POOL[(y * 12 + (m - 1)) % MONTH_BADGE_POOL.length];
+}
+// Every month from your first logged session to now (capped at the last 12)
+function badgeMonths(data, today) {
+  const keys = Object.keys(data.workouts).filter((d) =>
+    data.workouts[d].exercises.some((e) => e.sets.some(isWorkDone))
+  );
+  if (!keys.length) return [];
+  const first = keys.sort()[0].slice(0, 7);
+  const cur = today.slice(0, 7);
+  const out = [];
+  let [y, m] = first.split("-").map(Number);
+  const [cy, cm] = cur.split("-").map(Number);
+  while (y < cy || (y === cy && m <= cm)) {
+    out.push(`${y}-${pad(m)}`);
+    m++; if (m > 12) { m = 1; y++; }
+  }
+  return out.slice(-12);
 }
 
 // CD8 — loss aversion, the responsible way. Consecutive WEEKS with at least one
@@ -1807,16 +2236,22 @@ function ForgePanel({ fs, unit, today, data }) {
   );
 }
 
-function DailyCard({ data, unit, today, restMarked, onRest, onUndoRest, loggedToday, freezeAvail, onFreeze }) {
+function DailyCard({ data, unit, today, viewDate, dayLogged, restMarked, restKind, onRest, onUndoRest, loggedToday, freezeAvail, onFreeze }) {
   const streak = dailyStreak(data, today);
   const ch = challengeForDay(today);
   const st = dayChallengeStats(data, today);
   const done = ch.check(st);
+  const isToday = viewDate === today;
+  // Headline always describes today's streak state, whatever date is open
+  const todayRest = data.restDays && data.restDays[today];
   const sub = streak === 0
     ? "Show up today to start a streak"
-    : restMarked ? "Rest day logged — streak safe"
+    : todayRest === "travel" ? "Travelling for work — streak safe"
+    : todayRest ? "Rest day logged — streak safe"
     : loggedToday ? "Logged today — streak safe"
     : "Train, or log a rest day, to keep it";
+  // The buttons act on the date being viewed
+  const travelling = restMarked && restKind === "travel";
 
   // weekly challenge
   const ws = weekStartISO(today);
@@ -1826,7 +2261,7 @@ function DailyCard({ data, unit, today, restMarked, onRest, onUndoRest, loggedTo
   const wDone = wch.check(wst);
   const daysLeft = 7 - dayIdx(today) - 1;
   const frozenToday = !!(data.freezeDays && data.freezeDays[today]);
-  const streakAtRisk = !loggedToday && !restMarked && !frozenToday && streak > 0;
+  const streakAtRisk = !loggedToday && !todayRest && !frozenToday && streak > 0;
 
   return (
     <div style={S.dailyCard}>
@@ -1860,15 +2295,20 @@ function DailyCard({ data, unit, today, restMarked, onRest, onUndoRest, loggedTo
         <div style={S.chalProg}>{wDone ? "Done ✓" : wch.prog(wst, unit)}</div>
       </div>
 
-      {!loggedToday && (
+      {!dayLogged && (
         restMarked ? (
-          <button style={S.restUndoBtn} onClick={onUndoRest}>Resting today 🛡 — tap to undo</button>
-        ) : frozenToday ? (
+          <button style={S.restUndoBtn} onClick={onUndoRest}>
+            {travelling
+              ? (isToday ? "Travelling for work ✈ — tap to undo" : "Travelling ✈ (this date) — tap to undo")
+              : (isToday ? "Resting today 🛡 — tap to undo" : "Rest day 🛡 (this date) — tap to undo")}
+          </button>
+        ) : frozenToday && isToday ? (
           <button style={S.restUndoBtn}>🧊 Freeze active — streak safe</button>
         ) : (
           <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-            <button style={{ ...S.restBtn, flex: 1, marginTop: 0 }} onClick={onRest}>Rest day 🛡</button>
-            {streakAtRisk && freezeAvail > 0 && (
+            <button style={{ ...S.restBtn, flex: 1, marginTop: 0 }} onClick={() => onRest("rest")}>{isToday ? "Rest day 🛡" : "Mark rest day 🛡"}</button>
+            <button style={{ ...S.restBtn, flex: 1, marginTop: 0 }} onClick={() => onRest("travel")}>{isToday ? "Travelling ✈" : "Mark travelling ✈"}</button>
+            {isToday && streakAtRisk && freezeAvail > 0 && (
               <button style={{ ...S.restBtn, flex: 1, marginTop: 0, borderColor: "rgba(100,200,255,0.4)", color: "rgba(100,200,255,0.9)" }} onClick={onFreeze}>
                 Use freeze 🧊
               </button>
@@ -2176,6 +2616,10 @@ function CabinetView({ data, unit, today, onSetBodyweight, onImport }) {
           );
         })}
       </div>
+
+      <MonthBadges data={data} unit={unit} today={today} />
+
+      <RelicShelf data={data} />
 
       {board.length > 0 && (<>
         <div style={S.cabSect}>Hall of heavy <span style={S.cabCount}>Top 4 upper + 4 lower · est. 1RM</span></div>
@@ -2489,9 +2933,7 @@ const S = {
   check: { width: 40, height: 36, flexShrink: 0, background: C.iron, border: `1px solid ${C.line}`, borderRadius: 9, color: C.faint, fontSize: 16, cursor: "pointer", lineHeight: 1 },
   checkOn: { background: C.green, borderColor: C.green, color: "#0d130f", fontWeight: 700 },
 
-  plateBar: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", padding: "8px 6px 4px 36px" },
   plateLabel: { fontFamily: cond, fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase", color: C.faint, marginRight: 2 },
-  plate: { border: "none", borderRadius: 20, padding: "5px 10px", fontFamily: mono, fontWeight: 700, fontSize: 12, cursor: "pointer", boxShadow: "inset 0 0 0 2px rgba(0,0,0,0.18)" },
   removeSet: { background: "none", border: "none", color: C.faint, fontSize: 11, cursor: "pointer", marginLeft: "auto", textDecoration: "underline", fontFamily: body },
   addSet: { width: "100%", marginTop: 8, background: "none", border: `1px dashed ${C.line}`, color: C.dim, borderRadius: 9, padding: "9px", fontFamily: cond, fontSize: 13, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" },
 
@@ -2653,6 +3095,44 @@ Object.assign(S, {
   trophyBar: { height: 5, background: C.iron, border: `1px solid ${C.line}`, borderRadius: 5, overflow: "hidden", marginTop: 7 },
   trophyBarFill: { height: "100%", background: C.forgeDeep, borderRadius: 5 },
   trophyLocked: { fontFamily: cond, fontSize: 10.5, letterSpacing: 1.5, textTransform: "uppercase", color: C.faint, marginTop: 6 },
+
+  // workout templates
+  workoutBtn: { width: "100%", marginTop: 8, background: "transparent", color: C.forge, border: `1.5px solid ${C.forgeDeep}`, borderRadius: 13, padding: "13px", fontFamily: cond, fontWeight: 700, fontSize: 16, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 },
+  wkEmpty: { fontFamily: body, fontSize: 13, color: C.faint, padding: "14px 4px", lineHeight: 1.5 },
+  wkRow: { display: "flex", alignItems: "stretch", gap: 8, marginBottom: 8 },
+  wkStart: { flex: 1, minWidth: 0, textAlign: "left", background: C.iron3, border: `1px solid ${C.lineSoft}`, borderRadius: 12, padding: "12px 14px", cursor: "pointer", display: "flex", flexDirection: "column", gap: 3 },
+  wkName: { fontFamily: cond, fontWeight: 700, fontSize: 16, color: C.chalk, letterSpacing: 0.4 },
+  wkMeta: { fontFamily: body, fontSize: 11.5, color: C.faint },
+  wkEdit: { background: "none", border: `1px solid ${C.lineSoft}`, borderRadius: 12, color: C.faint, fontSize: 15, cursor: "pointer", padding: "0 14px" },
+  wkSelRow: { display: "flex", alignItems: "center", gap: 8, padding: "7px 2px", borderBottom: `1px solid ${C.lineSoft}` },
+  wkSelName: { flex: 1, minWidth: 0, fontFamily: body, fontSize: 13.5, color: C.chalk, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  wkSetNum: { fontFamily: mono, fontWeight: 700, fontSize: 14, color: C.forge, minWidth: 18, textAlign: "center" },
+  wkRemove: { background: "none", border: "none", color: C.faint, fontSize: 13, cursor: "pointer", padding: "2px 4px" },
+  wkLibRow: { width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, background: "none", border: "none", borderBottom: `1px solid ${C.lineSoft}`, padding: "11px 4px", cursor: "pointer", fontFamily: body, fontSize: 14, color: C.chalk, textAlign: "left" },
+  wkLibOn: { color: C.forge },
+  wkFoot: { display: "flex", gap: 8, padding: "10px 16px 16px" },
+  wkSave: { flex: 1, background: C.forge, color: "#1a1206", border: "none", borderRadius: 12, padding: "13px", fontFamily: cond, fontWeight: 700, fontSize: 15, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" },
+  wkDelete: { background: "none", border: `1px solid rgba(220,80,80,0.5)`, color: "rgba(230,110,110,0.9)", borderRadius: 12, padding: "13px 16px", fontFamily: cond, fontWeight: 700, fontSize: 13, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" },
+
+  // limited-edition monthly badges
+  mbLive: { opacity: 1, borderColor: C.forgeDeep, borderStyle: "dashed" },
+  mbMissed: { opacity: 0.55 },
+  mbTag: { fontFamily: cond, fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase", color: C.faint, marginTop: 3 },
+
+  // forge drops
+  dropCard: { margin: "auto", width: "88%", maxWidth: 340, background: C.iron2, border: `2px solid ${C.forgeDeep}`, borderRadius: 18, padding: "26px 22px", textAlign: "center", animation: "rise 0.25s ease", boxShadow: "0 18px 60px rgba(0,0,0,0.55)" },
+  dropEyebrow: { fontFamily: cond, fontSize: 12, letterSpacing: 3, textTransform: "uppercase", color: C.forge },
+  dropIcon: { fontSize: 52, margin: "14px 0 8px", filter: "drop-shadow(0 6px 14px rgba(0,0,0,0.5))" },
+  dropName: { fontFamily: cond, fontWeight: 700, fontSize: 24, color: C.chalk, letterSpacing: 0.5 },
+  dropRarity: { display: "inline-block", fontFamily: cond, fontSize: 11, letterSpacing: 2, textTransform: "uppercase", border: "1px solid", borderRadius: 20, padding: "3px 12px", marginTop: 8 },
+  dropLore: { fontFamily: body, fontSize: 13.5, color: C.faint, lineHeight: 1.55, margin: "14px 0 18px", fontStyle: "italic" },
+  dropBtn: { width: "100%", background: C.forge, color: "#1a1206", border: "none", borderRadius: 12, padding: "13px", fontFamily: cond, fontWeight: 700, fontSize: 15, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" },
+  relicGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 },
+  relicRarity: { fontFamily: cond, fontSize: 10.5, letterSpacing: 1.5, textTransform: "uppercase", marginTop: 5 },
+
+  // progressive overload target chip
+  recChip: { display: "inline-block", marginTop: 6, background: "rgba(224,163,60,0.08)", border: `1px solid ${C.forgeDeep}`, color: C.forge, borderRadius: 20, padding: "5px 12px", fontFamily: cond, fontWeight: 700, fontSize: 12, letterSpacing: 0.6, cursor: "pointer", textAlign: "left" },
+  recChipDone: { display: "inline-block", marginTop: 6, border: `1px solid ${C.lineSoft}`, color: C.faint, borderRadius: 20, padding: "5px 12px", fontFamily: cond, fontWeight: 700, fontSize: 12, letterSpacing: 0.6 },
   bwField: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, background: C.iron3, border: `1px solid ${C.line}`, borderRadius: 14, padding: "13px 15px" },
   bwLabel: { fontFamily: cond, fontWeight: 700, fontSize: 16, letterSpacing: 0.5, textTransform: "uppercase", color: C.chalk },
   bwHint: { fontFamily: body, fontSize: 11.5, color: C.faint, marginTop: 2 },
