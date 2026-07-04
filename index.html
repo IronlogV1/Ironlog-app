@@ -134,9 +134,18 @@ const LIB = [
   // Olympic
   ["pclean","Power Clean","Olympic"],["cj","Clean & Jerk","Olympic"],
   ["snatch","Snatch","Olympic"],["pushpress","Push Press","Olympic"],
+  // HIIT / conditioning — reps or ⏱ time, bodyweight-friendly
+  ["burpee","Burpees","HIIT"],["mtclimb","Mountain Climbers","HIIT"],
+  ["jsquat","Jump Squats","HIIT"],["boxjump","Box Jumps","HIIT"],
+  ["jlunge","Jumping Lunges","HIIT"],["highknee","High Knees","HIIT"],
+  ["jjack","Jumping Jacks","HIIT"],["skater","Skater Jumps","HIIT"],
+  ["tuckjump","Tuck Jumps","HIIT"],["kbswing","Kettlebell Swings","HIIT"],
+  ["ballslam","Med Ball Slams","HIIT"],["wallball","Wall Balls","HIIT"],
+  ["batrope","Battle Ropes","HIIT"],["bearcrawl","Bear Crawl","HIIT"],
+  ["sprawl","Sprawls","HIIT"],["sprint","Sprint Intervals","HIIT"],
 ].map((a) => ({ id: a[0], name: a[1], category: a[2], uni: !!a[3] }));
 
-const CATS = ["Chest", "Back", "Legs", "Shoulders", "Arms", "Core", "Olympic"];
+const CATS = ["Chest", "Back", "Legs", "Shoulders", "Arms", "Core", "Olympic", "HIIT"];
 
 // ---- Strength percentile estimates (adult male general population, BW-ratio based) ----
 // Curves: [bwRatio, percentile] pairs. Includes non-lifters, so gym-goers rank high.
@@ -281,7 +290,9 @@ function IronLog() {
     setData((prev) => {
       const w = { ...prev.workouts };
       const existed = !!w[logDate];
-      const day = existed ? { ...w[logDate], exercises: [...w[logDate].exercises] } : { exercises: [] };
+      const day = existed
+        ? { ...w[logDate], exercises: [...w[logDate].exercises], cardio: [...(w[logDate].cardio || [])] }
+        : { exercises: [], cardio: [] };
       fn(day);
       // a brand-new session logged on the real "today" stamps its start time from the clock.
       // backdated days are never auto-stamped — their time is set by hand.
@@ -351,6 +362,35 @@ function IronLog() {
     setWorkoutsOpen(false);
   };
 
+  // ---- Cardio ----
+  const [cardioOpen, setCardioOpen] = useState(false);
+  const addCardio = (c) => {
+    mutateDay((day) => {
+      day.cardio = [...(day.cardio || []), { uid: uid(), id: c.id, name: c.name, icon: c.icon, minutes: 0, km: 0, level: 0 }];
+    });
+    setCardioOpen(false);
+  };
+  const updateCardio = (cuid, fn) =>
+    mutateDay((day) => {
+      day.cardio = (day.cardio || []).map((c) => {
+        if (c.uid !== cuid) return c;
+        const n = { ...c };
+        fn(n);
+        return n;
+      });
+    });
+  const removeCardio = (cuid) =>
+    mutateDay((day) => { day.cardio = (day.cardio || []).filter((c) => c.uid !== cuid); });
+
+  const [hiitOpen, setHiitOpen] = useState(false);
+  const logHIIT = (cfg, roundsDone, totalSec) =>
+    mutateDay((day) => {
+      day.cardio = [
+        ...(day.cardio || []),
+        { uid: uid(), id: "hiit", name: "HIIT intervals", icon: "🔥", minutes: Math.max(1, Math.round(totalSec / 60)), km: 0, level: 0, hiit: { work: cfg.work, rest: cfg.rest, rounds: roundsDone } },
+      ];
+    });
+
   // ---- Forge drops ----
   // Rolled exactly once per session date, only when the session is finished
   // and only if it holds real work. The result is stored, so it survives
@@ -361,7 +401,8 @@ function IronLog() {
     const day = data.workouts[dateIso];
     if (!day) return null;
     const workSets = day.exercises.reduce((a, e) => a + e.sets.filter((s) => s.done && !s.warmup).length, 0);
-    if (workSets < DROP_MIN_SETS) return null;                     // token sessions don't roll
+    const cardioMin = (day.cardio || []).reduce((a, c) => a + (c.minutes || 0), 0);
+    if (workSets < DROP_MIN_SETS && cardioMin < DROP_MIN_CARDIO) return null;   // token sessions don't roll
     const ds = Object.keys(drops).sort();
     let misses = 0;
     for (let i = ds.length - 1; i >= 0; i--) { if (drops[ds[i]]) break; misses++; }
@@ -406,10 +447,7 @@ function IronLog() {
 
   const [shareMonth, setShareMonth] = useState(null); // "2026-06" for monthly report
 
-  const freezeEarned = Math.floor((Object.keys(data.workouts).filter(d => {
-    const wo = data.workouts[d];
-    return wo && wo.exercises && wo.exercises.some(ex => ex.sets.some(isWorkDone));
-  }).length) / 14);
+  const freezeEarned = Math.floor((Object.keys(data.workouts).filter(d => dayHasWork(data.workouts[d])).length) / 14);
   const freezeUsed = Object.keys(data.freezeDays || {}).length;
   const freezeAvail = Math.max(0, freezeEarned - freezeUsed);
   const useFreeze = () => {
@@ -491,6 +529,10 @@ function IronLog() {
             onRest={markRestDay}
             onUndoRest={clearRestDay}
             onAdd={() => setPickerOpen(true)}
+            cardio={data.workouts[logDate]?.cardio || []}
+            onAddCardio={() => setCardioOpen(true)}
+            updateCardio={updateCardio}
+            removeCardio={removeCardio}
             onOpenWorkouts={() => setWorkoutsOpen(true)}
             hasTemplates={(data.templates || []).length > 0}
             updateEx={updateEx}
@@ -518,6 +560,37 @@ function IronLog() {
         <DropReveal
           relicId={dropReveal}
           onClose={() => { setDropReveal(null); setShareDay(logDate); }}
+        />
+      )}
+
+      {cardioOpen && (
+        <div style={S.sheetBackdrop} onClick={() => setCardioOpen(false)}>
+          <div style={S.sheet} onClick={(e) => e.stopPropagation()}>
+            <div style={S.sheetGrip} />
+            <div style={S.sheetHead}>
+              <span style={S.sheetTitle}>Add cardio</span>
+              <button style={S.iconBtn} onClick={() => setCardioOpen(false)}>✕</button>
+            </div>
+            <div style={S.sheetScroll}>
+              <button style={{ ...S.wkLibRow, color: C.forge, fontWeight: 700 }} onClick={() => { setCardioOpen(false); setHiitOpen(true); }}>
+                <span>🔥&nbsp;&nbsp;Interval timer (HIIT)</span>
+                <span style={S.pickCat}>work / rest / rounds</span>
+              </button>
+              {CARDIO_LIB.map((c) => (
+                <button key={c.id} style={S.wkLibRow} onClick={() => addCardio(c)}>
+                  <span>{c.icon}&nbsp;&nbsp;{c.name}</span>
+                  <span style={S.pickCat}>add</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {hiitOpen && (
+        <HIITTimer
+          onClose={() => setHiitOpen(false)}
+          onLog={(cfg, roundsDone, totalSec) => { logHIIT(cfg, roundsDone, totalSec); setHiitOpen(false); }}
         />
       )}
 
@@ -580,7 +653,7 @@ function IronLog() {
 }
 
 /* ---------------- Log view ---------------- */
-function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logDate, onChangeDate, dayTime, onChangeTime, restMarked, restKind, onRest, onUndoRest, onAdd, onOpenWorkouts, hasTemplates, updateEx, removeEx, startRest, onShare, freezeAvail, onFreeze }) {
+function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logDate, onChangeDate, dayTime, onChangeTime, restMarked, restKind, onRest, onUndoRest, onAdd, cardio, onAddCardio, updateCardio, removeCardio, onOpenWorkouts, hasTemplates, updateEx, removeEx, startRest, onShare, freezeAvail, onFreeze }) {
   const isWork = (s) => s.done && !s.warmup;
   const isBackdate = logDate !== today;
   const timeLabel = dayTime ? fmtTime(dayTime) : (isBackdate ? "Add session time" : "Set time");
@@ -590,10 +663,14 @@ function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logD
     (a, e) => a + e.sets.filter(isWork).reduce((b, s) => b + inUnit(s, unit) * (s.reps || 0) * sideMult(s), 0),
     0
   );
+  const cardioList = cardio || [];
+  const cardioMin = cardioList.reduce((a, c) => a + (c.minutes || 0), 0);
+  const hasCardioWork = cardioList.some((c) => (c.minutes || 0) > 0 || (c.km || 0) > 0);
+  const emptyDay = exercises.length === 0 && cardioList.length === 0;
 
   return (
     <div>
-      <DailyCard data={data} unit={unit} today={today} viewDate={logDate} dayLogged={(exercises || []).some((e) => e.sets.some(isWorkDone))} restMarked={restMarked} restKind={restKind} onRest={onRest} onUndoRest={onUndoRest} loggedToday={(todayExercises || []).some((e) => e.sets.some(isWorkDone))} freezeAvail={freezeAvail} onFreeze={onFreeze} />
+      <DailyCard data={data} unit={unit} today={today} viewDate={logDate} dayLogged={dayHasWork(data.workouts[logDate])} restMarked={restMarked} restKind={restKind} onRest={onRest} onUndoRest={onUndoRest} loggedToday={dayHasWork(data.workouts[today])} freezeAvail={freezeAvail} onFreeze={onFreeze} />
 
       <div style={S.dateRow}>
         <div>
@@ -638,15 +715,15 @@ function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logD
             <button style={S.todayChip} onClick={() => onChangeDate(today)}>↩ Back to today</button>
           )}
         </div>
-        {exercises.length > 0 && (
+        {(exercises.length > 0 || cardioList.length > 0) && (
           <div style={{ textAlign: "right" }}>
             <div style={S.statBig}>{fmt(volume)}<span style={S.statUnit}>{unit}·vol</span></div>
-            <div style={S.statSub}>{totalSets} working sets</div>
+            <div style={S.statSub}>{totalSets} working sets{cardioMin > 0 ? ` · ${cardioMin} min cardio` : ""}</div>
           </div>
         )}
       </div>
 
-      {exercises.length === 0 ? (
+      {emptyDay ? (
         <div style={S.empty}>
           <div style={S.emptyMark}>◷</div>
           <div style={S.emptyTitle}>Nothing logged yet</div>
@@ -658,7 +735,7 @@ function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logD
             key={ex.uid}
             ex={ex}
             unit={unit}
-            rec={overloadFor(data, ex.id, ex.category, logDate, unit)}
+            rec={ex.timed ? null : overloadFor(data, ex.id, ex.category, logDate, unit)}
             update={(fn) => updateEx(ex.uid, fn)}
             remove={() => removeEx(ex.uid)}
             startRest={startRest}
@@ -666,14 +743,28 @@ function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logD
         ))
       )}
 
+      {cardioList.map((c) => (
+        <CardioCard
+          key={c.uid}
+          c={c}
+          unit={unit}
+          last={cardioLastFor(data, c.id, logDate, unit)}
+          update={(fn) => updateCardio(c.uid, fn)}
+          remove={() => removeCardio(c.uid)}
+        />
+      ))}
+
       <button style={S.addBtn} onClick={onAdd}>
         <span style={{ fontSize: 20, lineHeight: 1 }}>+</span> Add exercise
+      </button>
+      <button style={{ ...S.addBtn, marginTop: 8 }} onClick={onAddCardio}>
+        <span style={{ fontSize: 16, lineHeight: 1 }}>♥</span> Add cardio
       </button>
       <button style={S.workoutBtn} onClick={onOpenWorkouts}>
         <span style={{ fontSize: 15, lineHeight: 1 }}>▶</span> {hasTemplates ? "Start a workout" : "Create a workout"}
       </button>
 
-      {totalSets > 0 && (
+      {(totalSets > 0 || hasCardioWork) && (
         <button style={S.shareSessionBtn} onClick={onShare}>
           Finish session ✓
         </button>
@@ -683,6 +774,216 @@ function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logD
 }
 
 /* ---------------- Exercise card ---------------- */
+/* ---------------- HIIT interval timer ---------------- */
+const HIIT_PRESETS = [
+  { label: "Tabata 20/10 × 8",  work: 20, rest: 10, rounds: 8 },
+  { label: "30/30 × 10",        work: 30, rest: 30, rounds: 10 },
+  { label: "40/20 × 12",        work: 40, rest: 20, rounds: 12 },
+];
+function HIITTimer({ onClose, onLog }) {
+  const [cfg, setCfg] = useState({ work: 40, rest: 20, rounds: 10 });
+  const [run, setRun] = useState(null);
+
+  const beep = (f, d) => {
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      const ctx = window.__ilAC || (window.__ilAC = new Ctx());
+      if (ctx.state === "suspended") ctx.resume();
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.frequency.value = f; g.gain.value = 0.2;
+      o.connect(g); g.connect(ctx.destination);
+      const t = ctx.currentTime; o.start(t); o.stop(t + d);
+    } catch (e) {}
+  };
+  const buzz = (p) => { try { navigator.vibrate && navigator.vibrate(p); } catch (e) {} };
+
+  const start = () => {
+    beep(660, 0.1);
+    setRun({ phase: "ready", round: 0, endsAt: Date.now() + 10000, paused: false, startedAt: Date.now(), doneRounds: 0 });
+  };
+
+  useEffect(() => {
+    if (!run || run.paused || run.phase === "done") return;
+    const t = setInterval(() => {
+      setRun((r) => {
+        if (!r || r.paused || r.phase === "done") return r;
+        if (Date.now() < r.endsAt) return { ...r };           // tick re-render for the countdown
+        if (r.phase === "ready" || r.phase === "rest") {
+          beep(880, 0.15); buzz(200);
+          return { ...r, phase: "work", round: r.round + 1, endsAt: Date.now() + cfg.work * 1000 };
+        }
+        if (r.phase === "work") {
+          if (r.round >= cfg.rounds) { beep(520, 0.45); buzz([220, 100, 220, 100, 320]); return { ...r, phase: "done", doneRounds: r.round }; }
+          beep(440, 0.15); buzz(120);
+          return { ...r, phase: "rest", endsAt: Date.now() + cfg.rest * 1000 };
+        }
+        return r;
+      });
+    }, 200);
+    return () => clearInterval(t);
+  }, [run && run.paused, run && run.phase]);
+
+  const pause = () => setRun((r) => ({ ...r, paused: true, remainMs: r.endsAt - Date.now() }));
+  const resume = () => setRun((r) => ({ ...r, paused: false, endsAt: Date.now() + r.remainMs }));
+  const endEarly = () => setRun((r) => ({ ...r, phase: "done", doneRounds: r.phase === "work" ? r.round - 1 : r.round }));
+
+  const bump = (k, d, min, max) => setCfg((p) => ({ ...p, [k]: Math.max(min, Math.min(max, p[k] + d)) }));
+
+  // ----- config screen -----
+  if (!run) {
+    return (
+      <div style={S.sheetBackdrop} onClick={onClose}>
+        <div style={S.sheet} onClick={(e) => e.stopPropagation()}>
+          <div style={S.sheetGrip} />
+          <div style={S.sheetHead}>
+            <span style={S.sheetTitle}>🔥 Interval timer</span>
+            <button style={S.iconBtn} onClick={onClose}>✕</button>
+          </div>
+          <div style={{ padding: "0 16px 16px" }}>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+              {HIIT_PRESETS.map((p) => (
+                <button key={p.label} style={S.presetChip} onClick={() => setCfg({ work: p.work, rest: p.rest, rounds: p.rounds })}>{p.label}</button>
+              ))}
+            </div>
+            <div style={S.cardioRow}>
+              <div style={S.cardioField}>
+                <div style={S.cardioLab}>work (sec)</div>
+                <div style={S.stepper}>
+                  <button style={S.stepBtn} onClick={() => bump("work", -5, 5, 600)}>−</button>
+                  <input style={S.readout} inputMode="numeric" value={cfg.work} onChange={(e) => setCfg((p) => ({ ...p, work: Math.max(5, parseInt(e.target.value) || 5) }))} />
+                  <button style={S.stepBtn} onClick={() => bump("work", 5, 5, 600)}>+</button>
+                </div>
+              </div>
+              <div style={S.cardioField}>
+                <div style={S.cardioLab}>rest (sec)</div>
+                <div style={S.stepper}>
+                  <button style={S.stepBtn} onClick={() => bump("rest", -5, 0, 600)}>−</button>
+                  <input style={S.readout} inputMode="numeric" value={cfg.rest} onChange={(e) => setCfg((p) => ({ ...p, rest: Math.max(0, parseInt(e.target.value) || 0) }))} />
+                  <button style={S.stepBtn} onClick={() => bump("rest", 5, 0, 600)}>+</button>
+                </div>
+              </div>
+              <div style={S.cardioField}>
+                <div style={S.cardioLab}>rounds</div>
+                <div style={S.stepper}>
+                  <button style={S.stepBtn} onClick={() => bump("rounds", -1, 1, 50)}>−</button>
+                  <input style={S.readout} inputMode="numeric" value={cfg.rounds} onChange={(e) => setCfg((p) => ({ ...p, rounds: Math.max(1, parseInt(e.target.value) || 1) }))} />
+                  <button style={S.stepBtn} onClick={() => bump("rounds", 1, 1, 50)}>+</button>
+                </div>
+              </div>
+            </div>
+            <div style={{ ...S.trophySub, textAlign: "center", marginTop: 10 }}>
+              Total ≈ {Math.round((cfg.rounds * cfg.work + Math.max(0, cfg.rounds - 1) * cfg.rest) / 60)} min · 10s get-ready lead-in
+            </div>
+            <button style={{ ...S.wkSave, width: "100%", marginTop: 12 }} onClick={start}>Start ▶</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ----- done screen -----
+  if (run.phase === "done") {
+    const totalSec = Math.round((Date.now() - run.startedAt) / 1000);
+    return (
+      <div style={{ ...S.hiitOverlay, background: C.iron2 }}>
+        <div style={S.hiitPhase}>🔥 Finished</div>
+        <div style={S.hiitBig}>{run.doneRounds}</div>
+        <div style={S.hiitRound}>round{run.doneRounds === 1 ? "" : "s"} · {Math.max(1, Math.round(totalSec / 60))} min</div>
+        <div style={S.hiitBtnRow}>
+          {run.doneRounds > 0 && (
+            <button style={S.wkSave} onClick={() => onLog(cfg, run.doneRounds, totalSec)}>Log it ✓</button>
+          )}
+          <button style={S.hiitCtl} onClick={onClose}>Discard</button>
+        </div>
+      </div>
+    );
+  }
+
+  // ----- running screen -----
+  const remain = Math.max(0, run.paused ? run.remainMs : run.endsAt - Date.now());
+  const secs = Math.ceil(remain / 1000);
+  const bg = run.phase === "work" ? "#7a2413" : run.phase === "rest" ? "#14532d" : C.iron2;
+  const label = run.phase === "ready" ? "GET READY" : run.phase.toUpperCase();
+  return (
+    <div style={{ ...S.hiitOverlay, background: bg }}>
+      <div style={S.hiitPhase}>{label}</div>
+      <div style={S.hiitBig}>{secs}</div>
+      <div style={S.hiitRound}>{run.phase === "ready" ? `${cfg.work}s on / ${cfg.rest}s off × ${cfg.rounds}` : `Round ${run.round} / ${cfg.rounds}`}</div>
+      <div style={S.hiitBtnRow}>
+        <button style={S.hiitCtl} onClick={run.paused ? resume : pause}>{run.paused ? "Resume ▶" : "Pause ⏸"}</button>
+        <button style={S.hiitCtl} onClick={endEarly}>End ✕</button>
+      </div>
+    </div>
+  );
+}
+
+function CardioCard({ c, unit, last, update, remove }) {
+  const du = DIST_UNIT[unit];
+  const pace = paceStr(c.minutes, c.km, unit);
+  const setMin = (v) => update((n) => { n.minutes = Math.max(0, Math.round(v)); });
+  const setDist = (v) => update((n) => { n.km = distStore(v, unit); });
+  const setLvl = (v) => update((n) => { n.level = Math.max(0, Math.round(v)); });
+  const dShown = distDisp(c.km || 0, unit);
+  return (
+    <div style={S.card}>
+      <div style={S.cardHead}>
+        <div>
+          <div style={S.exName}>{c.icon} {c.name}</div>
+          <div style={S.exCat}>Cardio{c.hiit ? <span style={S.lastTag}>· {c.hiit.work}s on / {c.hiit.rest}s off × {c.hiit.rounds}</span> : pace ? <span style={S.lastTag}>· pace {pace}</span> : null}</div>
+          {last && <div style={S.recChip}>🎯 {last}</div>}
+        </div>
+        <div style={S.cardHeadBtns}>
+          <button style={S.iconBtn} aria-label="Remove cardio" onClick={remove}>✕</button>
+        </div>
+      </div>
+      <div style={S.cardioRow}>
+        <div style={S.cardioField}>
+          <div style={S.cardioLab}>min</div>
+          <div style={S.stepper}>
+            <button style={S.stepBtn} onClick={() => setMin((c.minutes || 0) - 1)}>−</button>
+            <input
+              style={S.readout}
+              inputMode="numeric"
+              value={c.minutes ? c.minutes : ""}
+              placeholder="0"
+              onChange={(e) => setMin(parseInt(e.target.value) || 0)}
+            />
+            <button style={S.stepBtn} onClick={() => setMin((c.minutes || 0) + 1)}>+</button>
+          </div>
+        </div>
+        <div style={S.cardioField}>
+          <div style={S.cardioLab}>{du}</div>
+          <div style={S.stepper}>
+            <button style={S.stepBtn} onClick={() => setDist(dShown - 0.5)}>−</button>
+            <input
+              style={S.readout}
+              inputMode="decimal"
+              value={dShown ? dShown : ""}
+              placeholder="0"
+              onChange={(e) => setDist(parseFloat(e.target.value) || 0)}
+            />
+            <button style={S.stepBtn} onClick={() => setDist(dShown + 0.5)}>+</button>
+          </div>
+        </div>
+        <div style={S.cardioField}>
+          <div style={S.cardioLab}>level</div>
+          <div style={S.stepper}>
+            <button style={S.stepBtn} onClick={() => setLvl((c.level || 0) - 1)}>−</button>
+            <input
+              style={S.readout}
+              inputMode="numeric"
+              value={c.level ? c.level : ""}
+              placeholder="–"
+              onChange={(e) => setLvl(parseInt(e.target.value) || 0)}
+            />
+            <button style={S.stepBtn} onClick={() => setLvl((c.level || 0) + 1)}>+</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ExerciseCard({ ex, unit, rec, update, remove, startRest }) {
   const [active, setActive] = useState(ex.sets.length - 1);
   const [recApplied, setRecApplied] = useState(false);
@@ -702,6 +1003,10 @@ function ExerciseCard({ ex, unit, rec, update, remove, startRest }) {
     update((e) => { e.sets[i].weight = Math.max(0, r1(w)); e.sets[i].unit = unit; });
   const setReps = (i, r) =>
     update((e) => { e.sets[i].reps = Math.max(0, Math.round(r)); });
+  const setSecs = (i, v) =>
+    update((e) => { e.sets[i].secs = Math.max(0, Math.round(v)); });
+  const toggleTimed = () =>
+    update((e) => { e.timed = !e.timed; });
   const toggleDone = (i) => {
     let nowDone = false;
     update((e) => { e.sets[i].done = !e.sets[i].done; nowDone = e.sets[i].done; });
@@ -761,6 +1066,11 @@ function ExerciseCard({ ex, unit, rec, update, remove, startRest }) {
         </div>
         <div style={S.cardHeadBtns}>
           <button
+            style={{ ...S.uniToggle, ...(ex.timed ? S.uniToggleOn : {}) }}
+            aria-label="Toggle time-based sets"
+            onClick={toggleTimed}
+          >⏱ time</button>
+          <button
             style={{ ...S.uniToggle, ...(uni ? S.uniToggleOn : {}) }}
             aria-label="Toggle per-side tracking"
             onClick={toggleUni}
@@ -799,17 +1109,35 @@ function ExerciseCard({ ex, unit, rec, update, remove, startRest }) {
             </div>
 
             <div style={S.stepper}>
-              <button style={S.stepBtn} onClick={(e) => { e.stopPropagation(); setReps(i, (s.reps || 0) - 1); }}>−</button>
-              <input
-                style={S.readout}
-                inputMode="numeric"
-                value={s.reps === 0 && !s.done ? "" : s.reps}
-                placeholder="0"
-                onFocus={() => setActive(i)}
-                onChange={(e) => setReps(i, parseInt(e.target.value) || 0)}
-                onClick={(e) => e.stopPropagation()}
-              />
-              <button style={S.stepBtn} onClick={(e) => { e.stopPropagation(); setReps(i, (s.reps || 0) + 1); }}>+</button>
+              {ex.timed ? (
+                <>
+                  <button style={S.stepBtn} onClick={(e) => { e.stopPropagation(); setSecs(i, (s.secs || 0) - 5); }}>−</button>
+                  <input
+                    style={S.readout}
+                    inputMode="numeric"
+                    value={(s.secs || 0) === 0 && !s.done ? "" : (s.secs || 0)}
+                    placeholder="sec"
+                    onFocus={() => setActive(i)}
+                    onChange={(e) => setSecs(i, parseInt(e.target.value) || 0)}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                  <button style={S.stepBtn} onClick={(e) => { e.stopPropagation(); setSecs(i, (s.secs || 0) + 5); }}>+</button>
+                </>
+              ) : (
+                <>
+                  <button style={S.stepBtn} onClick={(e) => { e.stopPropagation(); setReps(i, (s.reps || 0) - 1); }}>−</button>
+                  <input
+                    style={S.readout}
+                    inputMode="numeric"
+                    value={s.reps === 0 && !s.done ? "" : s.reps}
+                    placeholder="0"
+                    onFocus={() => setActive(i)}
+                    onChange={(e) => setReps(i, parseInt(e.target.value) || 0)}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                  <button style={S.stepBtn} onClick={(e) => { e.stopPropagation(); setReps(i, (s.reps || 0) + 1); }}>+</button>
+                </>
+              )}
             </div>
 
             <button
@@ -868,6 +1196,48 @@ function ExerciseCard({ ex, unit, rec, update, remove, startRest }) {
   );
 }
 
+/* ---------------- Distance forged + cardio targets ---------------- */
+function DistancePanel({ data, unit }) {
+  let km = 0, min = 0;
+  Object.values(data.workouts).forEach((d) => (d.cardio || []).forEach((c) => { km += c.km || 0; min += c.minutes || 0; }));
+  if (km <= 0 && min <= 0) return null;   // invisible until the first cardio session
+  const { cur, next } = kmTier(km);
+  const base = cur ? cur.km : 0;
+  const pct = next ? Math.min(100, Math.round(((km - base) / (next.km - base)) * 100)) : 100;
+  return (
+    <>
+      <div style={S.cabSect}>Distance forged <span style={S.cabCount}>{min.toLocaleString()} min of engine work</span></div>
+      <div style={{ ...S.trophy, ...S.trophyOn, textAlign: "left", marginBottom: 10 }}>
+        <div style={S.trophyName}>{distDisp(km, unit)} {DIST_UNIT[unit]} covered — lifetime</div>
+        <div style={S.trophySub}>
+          {cur ? `Past ${cur.label} ✓` : `First marker: ${distDisp(KM_TIERS[0].km, unit)} ${DIST_UNIT[unit]} — ${KM_TIERS[0].label}`}
+        </div>
+        {next && (
+          <>
+            <div style={S.trophyBar}><div style={{ ...S.trophyBarFill, width: pct + "%" }} /></div>
+            <div style={S.trophySub}>Next: {next.label} at {distDisp(next.km, unit)} {DIST_UNIT[unit]}</div>
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
+function cardioLastFor(data, cid, beforeDate, unit) {
+  const cutoff = addDaysISO(beforeDate, -21);
+  const dates = Object.keys(data.workouts).filter((d) => d < beforeDate && d >= cutoff).sort().reverse();
+  for (const d of dates) {
+    const c = (data.workouts[d].cardio || []).find((x) => x.id === cid && ((x.minutes || 0) > 0 || (x.km || 0) > 0));
+    if (c) {
+      if (c.hiit) return `Last: ${c.hiit.rounds} rounds of ${c.hiit.work}/${c.hiit.rest} — beat it`;
+      const p = paceStr(c.minutes, c.km, unit);
+      if ((c.km || 0) > 0) return `Last: ${distDisp(c.km, unit)} ${DIST_UNIT[unit]} in ${c.minutes} min${p ? ` (${p})` : ""} — beat it`;
+      return `Last: ${c.minutes} min — go longer`;
+    }
+  }
+  return null;
+}
+
 /* ---------------- Limited-edition monthly badges ---------------- */
 function MonthBadges({ data, unit, today }) {
   const months = badgeMonths(data, today);
@@ -884,8 +1254,8 @@ function MonthBadges({ data, unit, today }) {
   const earnedN = rows.filter((r) => r.got).length;
   const [y, m] = cur.split("-").map(Number);
   const daysLeft = new Date(y, m, 0).getDate() - Number(today.slice(8, 10));
-  const showVal = (r) => (r.b.kg ? fmt(unit === "kg" ? r.v : r.v * KG2LB) : r.v.toLocaleString());
-  const showTgt = (r) => (r.b.kg ? `${fmt(unit === "kg" ? r.b.target : r.b.target * KG2LB)} ${unit}` : r.b.target.toLocaleString());
+  const showVal = (r) => (r.b.kg ? fmt(unit === "kg" ? r.v : r.v * KG2LB) : r.b.dist ? distDisp(r.v, unit) : r.v.toLocaleString());
+  const showTgt = (r) => (r.b.kg ? `${fmt(unit === "kg" ? r.b.target : r.b.target * KG2LB)} ${unit}` : r.b.dist ? `${distDisp(r.b.target, unit)} ${DIST_UNIT[unit]}` : r.b.target.toLocaleString());
   const monthLabel = (ym) => { const [yy, mm] = ym.split("-").map(Number); return `${MO[mm - 1]} ${yy}`; };
 
   return (
@@ -1486,6 +1856,39 @@ const weekDates = (wsIso) => Array.from({ length: 7 }, (_, i) => addDaysISO(wsIs
 
 const isWorkDone = (s) => s.done && !s.warmup;
 
+// A day counts as trained if it holds finished strength sets OR logged cardio.
+const dayHasWork = (day) =>
+  !!day && (
+    (day.exercises || []).some((e) => e.sets.some(isWorkDone)) ||
+    (day.cardio || []).some((c) => (c.minutes || 0) > 0 || (c.km || 0) > 0)
+  );
+
+// Cardio machines and modalities. Distance is stored in km and shown in the
+// unit that matches the weight system (kg → km, lb → mi).
+const CARDIO_LIB = [
+  { id: "row",   name: "Rower",         icon: "🚣" },
+  { id: "tread", name: "Treadmill",     icon: "🏃" },
+  { id: "bike",  name: "Bike",          icon: "🚴" },
+  { id: "stair", name: "Stair climber", icon: "🪜" },
+  { id: "ellip", name: "Elliptical",    icon: "🌀" },
+  { id: "ski",   name: "Ski erg",       icon: "⛷️" },
+  { id: "run",   name: "Run (outdoor)", icon: "🏞️" },
+  { id: "walk",  name: "Walk / incline",icon: "🚶" },
+  { id: "swim",  name: "Swim",          icon: "🏊" },
+  { id: "rope",  name: "Jump rope",     icon: "🪢" },
+];
+const DIST_UNIT = { kg: "km", lb: "mi" };
+const KM2MI = 0.621371;
+const distDisp = (km, unit) => r1(unit === "kg" ? km : km * KM2MI);
+const distStore = (v, unit) => Math.max(0, unit === "kg" ? v : v / KM2MI);
+const paceStr = (minutes, km, unit) => {
+  const d = unit === "kg" ? km : km * KM2MI;
+  if (!minutes || !d) return null;
+  const p = minutes / d;
+  const mm = Math.floor(p), ss = Math.round((p - mm) * 60);
+  return `${mm}:${String(ss).padStart(2, "0")} /${DIST_UNIT[unit]}`;
+};
+
 // real-world weight equivalents to make abstract volume tangible
 const EQUIV = [
   { kg: 6000, label: "African elephant", lab2: "African elephants" },
@@ -1637,7 +2040,8 @@ function rollRelic() {
   return pool[Math.floor(Math.random() * pool.length)].id;
 }
 const DROP_CHANCE = 0.22;   // ≈ one drop every 4–5 finished sessions
-const DROP_MIN_SETS = 10;   // a real session, not a token one
+const DROP_MIN_SETS = 10;   // a real strength session…
+const DROP_MIN_CARDIO = 20; // …or a real cardio session (minutes)
 const PITY_AT = 8;          // the 8th dry session in a row guarantees a drop
 
 // Progressive overload targets — double progression, tuned by exercise type.
@@ -1682,16 +2086,36 @@ const MONTH_BADGE_POOL = [
   { key: "sets", icon: "🧱", title: "Brick by Brick",  sub: "Log 200 working sets in the month",      target: 200,   val: (ms) => ms.sets },
   { key: "reps", icon: "🔢", title: "Thousand Club",   sub: "Grind out 1,500 reps in the month",      target: 1500,  val: (ms) => ms.reps },
   { key: "cats", icon: "🧭", title: "The Generalist",  sub: "Hit 5 muscle groups across 10 sessions", target: 1,     val: (ms) => (ms.cats >= 5 && ms.sessions >= 10 ? 1 : 0) },
+  { key: "cmin", icon: "🫀", title: "Engine Builder",  sub: "Bank 300 cardio minutes in the month",   target: 300,   val: (ms) => ms.cardioMin },
+  { key: "ckm",  icon: "🗺️", title: "Ground Covered",  sub: "Cover 60 km of distance in the month",   target: 60,    val: (ms) => ms.cardioKm, dist: true },
+  { key: "hiit", icon: "🔥", title: "Round After Round", sub: "Finish 100 HIIT rounds in the month",  target: 100,   val: (ms) => ms.hiitRounds },
 ];
+
+// Lifetime distance ladder — the cardio mirror of the tonnage tiers
+const KM_TIERS = [
+  { km: 5,    label: "a parkrun" },
+  { km: 21.1, label: "a half marathon" },
+  { km: 42.2, label: "a marathon" },
+  { km: 100,  label: "a 100k ultra" },
+  { km: 226,  label: "a full Ironman course" },
+  { km: 878,  label: "Melbourne to Sydney" },
+  { km: 1600, label: "the length of New Zealand" },
+  { km: 3900, label: "Perth to Sydney, coast to coast" },
+];
+function kmTier(km) {
+  let cur = null, next = KM_TIERS[0];
+  for (let i = 0; i < KM_TIERS.length; i++) {
+    if (km >= KM_TIERS[i].km) { cur = KM_TIERS[i]; next = KM_TIERS[i + 1] || null; }
+  }
+  return { cur, next };
+}
 function monthBadgeFor(ym) {
   const [y, m] = ym.split("-").map(Number);
   return MONTH_BADGE_POOL[(y * 12 + (m - 1)) % MONTH_BADGE_POOL.length];
 }
 // Every month from your first logged session to now (capped at the last 12)
 function badgeMonths(data, today) {
-  const keys = Object.keys(data.workouts).filter((d) =>
-    data.workouts[d].exercises.some((e) => e.sets.some(isWorkDone))
-  );
+  const keys = Object.keys(data.workouts).filter((d) => dayHasWork(data.workouts[d]));
   if (!keys.length) return [];
   const first = keys.sort()[0].slice(0, 7);
   const cur = today.slice(0, 7);
@@ -1778,7 +2202,7 @@ const earnedSet = (s) => MILESTONES.filter((m) => m.test(s));
 // is what counts — this also removes the old "first log = PR" inflation.
 function forgeStats(data, uptoIso) {
   const dates = Object.keys(data.workouts).sort().filter((d) => !uptoIso || d <= uptoIso);
-  let volKg = 0, prs = 0, totalSets = 0, armReps = 0, totalReps = 0, maxSessionVolKg = 0;
+  let volKg = 0, prs = 0, totalSets = 0, armReps = 0, totalReps = 0, maxSessionVolKg = 0, cardioMin = 0, cardioKm = 0;
   const exBest = {};
   const exName = {};
   const exCat = {};
@@ -1806,6 +2230,12 @@ function forgeStats(data, uptoIso) {
         if (v > (dayBest[ex.id] || 0)) dayBest[ex.id] = v;
       })
     );
+    (data.workouts[d].cardio || []).forEach((c) => {
+      if ((c.minutes || 0) <= 0 && (c.km || 0) <= 0) return;
+      worked = true;
+      cardioMin += c.minutes || 0;
+      cardioKm += c.km || 0;
+    });
     if (worked) { sessionSet.add(d); weekSet.add(weekStartISO(d)); if (dayVol > maxSessionVolKg) maxSessionVolKg = dayVol; }
     for (const id in dayBest) {
       if (exBest[id] === undefined) exBest[id] = dayBest[id];           // first time — not a PR
@@ -1820,7 +2250,7 @@ function forgeStats(data, uptoIso) {
   const maxWeekSessions = Object.values(weekSessionCount).reduce((a, b) => Math.max(a, b), 0);
   return {
     volKg, prs, prLifts: prExSet.size, sessions: sessionSet.size, score, weekSet, exBest, exName, exCat,
-    totalSets, armReps, totalReps, maxSessionVolKg, uniqueExes, maxWeekSessions,
+    totalSets, armReps, totalReps, maxSessionVolKg, uniqueExes, maxWeekSessions, cardioMin, cardioKm,
   };
 }
 
@@ -1832,7 +2262,7 @@ function dailyStreak(data, today) {
   const freezeDays = data.freezeDays || {};
   const active = (iso) =>
     !!restDays[iso] || !!freezeDays[iso] ||
-    (data.workouts[iso] && data.workouts[iso].exercises.some((ex) => ex.sets.some(isWorkDone)));
+    dayHasWork(data.workouts[iso]);
   let d = active(today) ? today : addDaysISO(today, -1);
   let n = 0;
   while (active(d)) { n++; d = addDaysISO(d, -1); }
@@ -1855,7 +2285,7 @@ function maxDailyStreak(data, upToIso) {
   const last = sorted[sorted.length - 1];
   const active = (iso) =>
     !!restDays[iso] || !!freezeDays[iso] ||
-    (data.workouts[iso] && data.workouts[iso].exercises.some((ex) => ex.sets.some(isWorkDone)));
+    dayHasWork(data.workouts[iso]);
   let max = 0, cur = 0;
   let d = first;
   while (d <= last) {
@@ -2020,9 +2450,9 @@ function monthStats(data, yearMonth) {
   const daysInMonth = new Date(y, m, 0).getDate();
   const dates = [];
   for (let d = 1; d <= daysInMonth; d++) dates.push(`${y}-${pad(m)}-${pad(d)}`);
-  let volKg = 0, sets = 0, reps = 0;
+  let volKg = 0, sets = 0, reps = 0, cardioMin = 0, cardioKm = 0, hiitRounds = 0;
   const sessionDates = new Set(), cats = new Set();
-  dates.filter(d => data.workouts[d]).forEach(d =>
+  dates.filter(d => data.workouts[d]).forEach(d => {
     data.workouts[d].exercises.forEach(ex =>
       ex.sets.forEach(s => {
         if (!isWorkDone(s)) return;
@@ -2031,13 +2461,20 @@ function monthStats(data, yearMonth) {
         sets += mult; reps += (s.reps || 0) * mult;
         cats.add(ex.category); sessionDates.add(d);
       })
-    )
-  );
+    );
+    (data.workouts[d].cardio || []).forEach((c) => {
+      if ((c.minutes || 0) <= 0 && (c.km || 0) <= 0) return;
+      cardioMin += c.minutes || 0;
+      cardioKm += c.km || 0;
+      if (c.hiit) hiitRounds += c.hiit.rounds || 0;
+      sessionDates.add(d);
+    });
+  });
   const beforeMonth = `${y}-${pad(m)}-00`;
   const endMonth = dates[dates.length - 1];
   const prsBefore = forgeStats(data, addDaysISO(dates[0], -1)).prs;
   const prsEnd = forgeStats(data, endMonth).prs;
-  return { volKg, sets, reps, sessions: sessionDates.size, cats: cats.size, prs: prsEnd - prsBefore, yearMonth };
+  return { volKg, sets, reps, sessions: sessionDates.size, cats: cats.size, prs: prsEnd - prsBefore, cardioMin, cardioKm, hiitRounds, yearMonth };
 }
 
 async function tryShare(text, setHint) {
@@ -2617,6 +3054,8 @@ function CabinetView({ data, unit, today, onSetBodyweight, onImport }) {
         })}
       </div>
 
+      <DistancePanel data={data} unit={unit} />
+
       <MonthBadges data={data} unit={unit} today={today} />
 
       <RelicShelf data={data} />
@@ -2753,6 +3192,10 @@ function SessionShare({ data, unit, dateIso, saveState, lastSaved, onClose }) {
   const volKg = unit === "kg" ? st.volume : st.volume / KG2LB;
   const equiv = equivalent(volKg);
   const dayTime = data.workouts[dateIso]?.time;
+  const cardioL = data.workouts[dateIso]?.cardio || [];
+  const cMin = cardioL.reduce((a, c) => a + (c.minutes || 0), 0);
+  const cKm = cardioL.reduce((a, c) => a + (c.km || 0), 0);
+  const cRounds = cardioL.reduce((a, c) => a + (c.hiit ? c.hiit.rounds || 0 : 0), 0);
 
   // progression diff — what this session unlocked vs everything before today
   const beforeRaw = forgeStats(data, addDaysISO(dateIso, -1));
@@ -2770,6 +3213,7 @@ function SessionShare({ data, unit, dateIso, saveState, lastSaved, onClose }) {
   const shareText =
     `IRONLOG — ${headDate(dateIso)}${dayTime ? " · " + fmtTime(dayTime) : ""}\n` +
     `${exCount} lifts · ${st.sets} working sets · ${fmt(st.volume)} ${unit} moved\n` +
+    (cMin > 0 ? `${cMin} min cardio${cKm > 0 ? ` · ${distDisp(cKm, unit)} ${DIST_UNIT[unit]}` : ""}${cRounds > 0 ? ` · ${cRounds} HIIT rounds` : ""}\n` : "") +
     (leveledUp ? `Reached Forge Level ${lvNow} ⚡\n` : "") +
     (newMiles.length ? `Milestone: ${newMiles[newMiles.length - 1].title} 🔓\n` : "") +
     (prs.length ? `${prs.length} PR${prs.length === 1 ? "" : "s"} 🏆\n` : "") +
@@ -2814,6 +3258,13 @@ function SessionShare({ data, unit, dateIso, saveState, lastSaved, onClose }) {
             <div style={S.lineItem}>
               <span style={S.lineKey}>Top set</span>
               <span style={S.lineVal}>{st.heaviestName} · {fmt(st.heaviest)} {unit} × {st.heaviestReps}</span>
+            </div>
+          )}
+
+          {cMin > 0 && (
+            <div style={S.lineItem}>
+              <span style={S.lineKey}>Cardio</span>
+              <span style={S.lineVal}>{cMin} min{cKm > 0 ? ` · ${distDisp(cKm, unit)} ${DIST_UNIT[unit]}` : ""}{cRounds > 0 ? ` · ${cRounds} rounds` : ""}</span>
             </div>
           )}
 
@@ -3133,6 +3584,20 @@ Object.assign(S, {
   // progressive overload target chip
   recChip: { display: "inline-block", marginTop: 6, background: "rgba(224,163,60,0.08)", border: `1px solid ${C.forgeDeep}`, color: C.forge, borderRadius: 20, padding: "5px 12px", fontFamily: cond, fontWeight: 700, fontSize: 12, letterSpacing: 0.6, cursor: "pointer", textAlign: "left" },
   recChipDone: { display: "inline-block", marginTop: 6, border: `1px solid ${C.lineSoft}`, color: C.faint, borderRadius: 20, padding: "5px 12px", fontFamily: cond, fontWeight: 700, fontSize: 12, letterSpacing: 0.6 },
+
+  // cardio cards
+  cardioRow: { display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" },
+  cardioField: { flex: 1, minWidth: 90 },
+  cardioLab: { fontFamily: cond, fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase", color: C.faint, marginBottom: 4, textAlign: "center" },
+
+  // HIIT interval timer
+  hiitOverlay: { position: "fixed", inset: 0, zIndex: 60, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, transition: "background 0.3s ease" },
+  hiitPhase: { fontFamily: cond, fontWeight: 700, fontSize: 22, letterSpacing: 6, textTransform: "uppercase", color: "rgba(255,255,255,0.85)" },
+  hiitBig: { fontFamily: mono, fontWeight: 700, fontSize: 120, lineHeight: 1, color: "#fff", textShadow: "0 6px 30px rgba(0,0,0,0.4)" },
+  hiitRound: { fontFamily: cond, fontSize: 15, letterSpacing: 2, textTransform: "uppercase", color: "rgba(255,255,255,0.7)" },
+  hiitBtnRow: { display: "flex", gap: 10, marginTop: 30 },
+  hiitCtl: { background: "rgba(0,0,0,0.3)", border: "1.5px solid rgba(255,255,255,0.35)", color: "#fff", borderRadius: 12, padding: "12px 22px", fontFamily: cond, fontWeight: 700, fontSize: 15, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" },
+  presetChip: { background: C.iron3, border: `1px solid ${C.lineSoft}`, color: C.chalk, borderRadius: 20, padding: "7px 13px", fontFamily: cond, fontWeight: 700, fontSize: 12.5, letterSpacing: 0.5, cursor: "pointer" },
   bwField: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, background: C.iron3, border: `1px solid ${C.line}`, borderRadius: 14, padding: "13px 15px" },
   bwLabel: { fontFamily: cond, fontWeight: 700, fontSize: 16, letterSpacing: 0.5, textTransform: "uppercase", color: C.chalk },
   bwHint: { fontFamily: body, fontSize: 11.5, color: C.faint, marginTop: 2 },
