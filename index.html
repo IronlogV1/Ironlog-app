@@ -198,7 +198,7 @@ async function writeStore(payload) {
 
 /* ============================================================ */
 function IronLog() {
-  const [data, setData] = useState({ unit: "kg", workouts: {}, custom: [], restDays: {}, bodyweight: null, freezeDays: {}, templates: [], drops: {} });
+  const [data, setData] = useState({ unit: "kg", workouts: {}, custom: [], restDays: {}, bodyweight: null, bwLog: {}, freezeDays: {}, templates: [], drops: {} });
   const [loaded, setLoaded] = useState(false);
   const [view, setView] = useState("log"); // log | week | progress | cabinet
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -462,12 +462,20 @@ function IronLog() {
   const markRestDay = (kind) => setData((p) => ({ ...p, restDays: { ...(p.restDays || {}), [logDate]: kind === "travel" ? "travel" : true } }));
   const clearRestDay = () => setData((p) => { const r = { ...(p.restDays || {}) }; delete r[logDate]; return { ...p, restDays: r }; });
   const setBodyweight = (kg) => setData((p) => ({ ...p, bodyweight: kg }));
+  const logBW = (dateIso, kg) =>
+    setData((p) => {
+      const log = { ...(p.bwLog || {}) };
+      if (kg > 0) log[dateIso] = kg; else delete log[dateIso];
+      const latestKey = Object.keys(log).sort().pop();
+      return { ...p, bwLog: log, bodyweight: latestKey ? log[latestKey] : p.bodyweight };
+    });
   const importData = (obj) => setData({
     unit: obj.unit === "lb" ? "lb" : "kg",
     workouts: obj.workouts && typeof obj.workouts === "object" ? obj.workouts : {},
     custom: Array.isArray(obj.custom) ? obj.custom : [],
     restDays: obj.restDays && typeof obj.restDays === "object" ? obj.restDays : {},
     bodyweight: typeof obj.bodyweight === "number" ? obj.bodyweight : null,
+    bwLog: obj.bwLog && typeof obj.bwLog === "object" ? obj.bwLog : {},
     freezeDays: obj.freezeDays && typeof obj.freezeDays === "object" ? obj.freezeDays : {},
     templates: Array.isArray(obj.templates) ? obj.templates : [],
     drops: obj.drops && typeof obj.drops === "object" ? obj.drops : {},
@@ -529,6 +537,7 @@ function IronLog() {
             onRest={markRestDay}
             onUndoRest={clearRestDay}
             onAdd={() => setPickerOpen(true)}
+            onLogBW={logBW}
             cardio={data.workouts[logDate]?.cardio || []}
             onAddCardio={() => setCardioOpen(true)}
             updateCardio={updateCardio}
@@ -653,7 +662,7 @@ function IronLog() {
 }
 
 /* ---------------- Log view ---------------- */
-function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logDate, onChangeDate, dayTime, onChangeTime, restMarked, restKind, onRest, onUndoRest, onAdd, cardio, onAddCardio, updateCardio, removeCardio, onOpenWorkouts, hasTemplates, updateEx, removeEx, startRest, onShare, freezeAvail, onFreeze }) {
+function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logDate, onChangeDate, dayTime, onChangeTime, restMarked, restKind, onRest, onUndoRest, onAdd, onLogBW, cardio, onAddCardio, updateCardio, removeCardio, onOpenWorkouts, hasTemplates, updateEx, removeEx, startRest, onShare, freezeAvail, onFreeze }) {
   const isWork = (s) => s.done && !s.warmup;
   const isBackdate = logDate !== today;
   const timeLabel = dayTime ? fmtTime(dayTime) : (isBackdate ? "Add session time" : "Set time");
@@ -671,6 +680,8 @@ function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logD
   return (
     <div>
       <DailyCard data={data} unit={unit} today={today} viewDate={logDate} dayLogged={dayHasWork(data.workouts[logDate])} restMarked={restMarked} restKind={restKind} onRest={onRest} onUndoRest={onUndoRest} loggedToday={dayHasWork(data.workouts[today])} freezeAvail={freezeAvail} onFreeze={onFreeze} />
+
+      <BWChip data={data} unit={unit} logDate={logDate} onLog={onLogBW} />
 
       <div style={S.dateRow}>
         <div>
@@ -917,13 +928,57 @@ function HIITTimer({ onClose, onLog }) {
   );
 }
 
+/* ---------------- Bodyweight tracker ---------------- */
+function BWChip({ data, unit, logDate, onLog }) {
+  const kg = (data.bwLog || {})[logDate];
+  const shown = kg ? r1(unit === "kg" ? kg : kg * KG2LB) : null;
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState("");
+  const save = () => {
+    const v = parseFloat(draft);
+    onLog(logDate, v > 0 ? (unit === "kg" ? v : v / KG2LB) : 0);
+    setOpen(false); setDraft("");
+  };
+  if (open) {
+    return (
+      <div style={S.bwRow}>
+        <span style={S.bwLab}>⚖ Bodyweight ({unit})</span>
+        <input
+          style={{ ...S.readout, maxWidth: 90 }}
+          inputMode="decimal"
+          autoFocus
+          value={draft}
+          placeholder={shown || ""}
+          onChange={(e) => { if (/^\d*\.?\d*$/.test(e.target.value)) setDraft(e.target.value); }}
+          onKeyDown={(e) => { if (e.key === "Enter") save(); }}
+        />
+        <button style={S.bwSave} onClick={save}>Save</button>
+        <button style={S.iconBtn} onClick={() => { setOpen(false); setDraft(""); }}>✕</button>
+      </div>
+    );
+  }
+  return (
+    <button style={S.bwRow} onClick={() => setOpen(true)}>
+      <span style={S.bwLab}>⚖ Bodyweight</span>
+      <span style={shown ? S.bwVal : S.bwGhost}>{shown ? `${shown} ${unit}` : "log it — optional"}</span>
+    </button>
+  );
+}
+
 function CardioCard({ c, unit, last, update, remove }) {
   const du = DIST_UNIT[unit];
   const pace = paceStr(c.minutes, c.km, unit);
+  const lvlLab = (CARDIO_LIB.find((x) => x.id === c.id) || {}).lvl;
+  const [dDraft, setDDraft] = useState(null);
   const setMin = (v) => update((n) => { n.minutes = Math.max(0, Math.round(v)); });
   const setDist = (v) => update((n) => { n.km = distStore(v, unit); });
   const setLvl = (v) => update((n) => { n.level = Math.max(0, Math.round(v)); });
   const dShown = distDisp(c.km || 0, unit);
+  const onDistType = (raw) => {
+    if (!/^\d*\.?\d*$/.test(raw)) return;
+    setDDraft(raw);
+    setDist(parseFloat(raw) || 0);
+  };
   return (
     <div style={S.card}>
       <div style={S.cardHead}>
@@ -954,31 +1009,34 @@ function CardioCard({ c, unit, last, update, remove }) {
         <div style={S.cardioField}>
           <div style={S.cardioLab}>{du}</div>
           <div style={S.stepper}>
-            <button style={S.stepBtn} onClick={() => setDist(dShown - 0.5)}>−</button>
+            <button style={S.stepBtn} onClick={() => { setDDraft(null); setDist(dShown - 0.5); }}>−</button>
             <input
               style={S.readout}
               inputMode="decimal"
-              value={dShown ? dShown : ""}
+              value={dDraft !== null ? dDraft : (dShown ? dShown : "")}
               placeholder="0"
-              onChange={(e) => setDist(parseFloat(e.target.value) || 0)}
+              onChange={(e) => onDistType(e.target.value)}
+              onBlur={() => setDDraft(null)}
             />
-            <button style={S.stepBtn} onClick={() => setDist(dShown + 0.5)}>+</button>
+            <button style={S.stepBtn} onClick={() => { setDDraft(null); setDist(dShown + 0.5); }}>+</button>
           </div>
         </div>
-        <div style={S.cardioField}>
-          <div style={S.cardioLab}>level</div>
-          <div style={S.stepper}>
-            <button style={S.stepBtn} onClick={() => setLvl((c.level || 0) - 1)}>−</button>
-            <input
-              style={S.readout}
-              inputMode="numeric"
-              value={c.level ? c.level : ""}
-              placeholder="–"
-              onChange={(e) => setLvl(parseInt(e.target.value) || 0)}
-            />
-            <button style={S.stepBtn} onClick={() => setLvl((c.level || 0) + 1)}>+</button>
+        {lvlLab && (
+          <div style={S.cardioField}>
+            <div style={S.cardioLab}>{lvlLab}</div>
+            <div style={S.stepper}>
+              <button style={S.stepBtn} onClick={() => setLvl((c.level || 0) - 1)}>−</button>
+              <input
+                style={S.readout}
+                inputMode="numeric"
+                value={c.level ? c.level : ""}
+                placeholder="–"
+                onChange={(e) => setLvl(parseInt(e.target.value) || 0)}
+              />
+              <button style={S.stepBtn} onClick={() => setLvl((c.level || 0) + 1)}>+</button>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
@@ -987,7 +1045,14 @@ function CardioCard({ c, unit, last, update, remove }) {
 function ExerciseCard({ ex, unit, rec, update, remove, startRest }) {
   const [active, setActive] = useState(ex.sets.length - 1);
   const [recApplied, setRecApplied] = useState(false);
+  const [wDrafts, setWDrafts] = useState({});
   const step = STEP[unit];
+  const onWeightType = (i, raw) => {
+    if (!/^\d*\.?\d*$/.test(raw)) return;
+    setWDrafts((p) => ({ ...p, [i]: raw }));
+    setWeight(i, parseFloat(raw) || 0);
+  };
+  const clearWDraft = (i) => setWDrafts((p) => { const n = { ...p }; delete n[i]; return n; });
 
   const applyRec = () => {
     if (!rec) return;
@@ -1054,12 +1119,12 @@ function ExerciseCard({ ex, unit, rec, update, remove, startRest }) {
           </div>
           {rec && (
             recApplied ? (
-              <div style={S.recChipDone}>🎯 Target set — {rec.reps}{rec.mode === "reps" ? `–${rec.hi}` : "+"} reps at {rec.weight} {unit}</div>
+              <div style={S.recChipDone}>🎯 Target set — {rec.weight} {unit}, {rec.reps}{rec.mode === "reps" ? `–${rec.hi}` : "+"} reps on every working set</div>
             ) : (
               <button style={S.recChip} onClick={applyRec}>
                 🎯 {rec.mode === "load"
-                  ? `Step up: ${rec.weight} ${unit} × ${rec.reps} — you earned it`
-                  : `Beat last time: ${rec.weight} ${unit} × ${rec.reps}+`}
+                  ? `Step up: ${rec.weight} ${unit} — aim ${rec.reps}+ reps on every set`
+                  : `Beat last time: ${rec.weight} ${unit} — get ${rec.reps}+ reps on every set`}
               </button>
             )
           )}
@@ -1095,17 +1160,18 @@ function ExerciseCard({ ex, unit, rec, update, remove, startRest }) {
             <div style={{ ...S.setNum, ...(s.warmup ? S.setNumWarm : {}), ...(uni && !s.warmup ? S.setNumSide : {}), ...(labels[i].length > 1 ? S.setNumWide : {}) }}>{labels[i]}</div>
 
             <div style={S.stepper}>
-              <button style={S.stepBtn} onClick={(e) => { e.stopPropagation(); setActive(i); setWeight(i, inUnit(s, unit) - step); }}>−</button>
+              <button style={S.stepBtn} onClick={(e) => { e.stopPropagation(); setActive(i); clearWDraft(i); setWeight(i, inUnit(s, unit) - step); }}>−</button>
               <input
                 style={S.readout}
                 inputMode="decimal"
-                value={s.weight === 0 && !s.done ? "" : wDisp(s)}
+                value={wDrafts[i] !== undefined ? wDrafts[i] : (s.weight === 0 && !s.done ? "" : wDisp(s))}
                 placeholder="0"
                 onFocus={() => setActive(i)}
-                onChange={(e) => setWeight(i, parseFloat(e.target.value) || 0)}
+                onChange={(e) => onWeightType(i, e.target.value)}
+                onBlur={() => clearWDraft(i)}
                 onClick={(e) => e.stopPropagation()}
               />
-              <button style={S.stepBtn} onClick={(e) => { e.stopPropagation(); setActive(i); setWeight(i, inUnit(s, unit) + step); }}>+</button>
+              <button style={S.stepBtn} onClick={(e) => { e.stopPropagation(); setActive(i); clearWDraft(i); setWeight(i, inUnit(s, unit) + step); }}>+</button>
             </div>
 
             <div style={S.stepper}>
@@ -1571,6 +1637,22 @@ function ProgressView({ data, unit, progId, setProgId }) {
           ))}
         </>
       )}
+
+      {(() => {
+        const entries = Object.entries(data.bwLog || {}).sort((a, b) => (a[0] < b[0] ? -1 : 1));
+        if (entries.length < 2) return null;
+        const bwPoints = entries.map(([date, kg]) => ({ date, value: r1(unit === "kg" ? kg : kg * KG2LB) }));
+        const delta = r1(bwPoints[bwPoints.length - 1].value - bwPoints[0].value);
+        return (
+          <>
+            <div style={{ ...S.eyebrow, marginTop: 22 }}>Bodyweight</div>
+            <Chart points={bwPoints} unit={unit} pr={-1} />
+            <div style={{ ...S.trophySub, textAlign: "right" }}>
+              {delta === 0 ? "holding steady" : `${delta > 0 ? "+" : ""}${delta} ${unit} since ${shortDate(bwPoints[0].date)}`}
+            </div>
+          </>
+        );
+      })()}
     </div>
   );
 }
@@ -1866,14 +1948,14 @@ const dayHasWork = (day) =>
 // Cardio machines and modalities. Distance is stored in km and shown in the
 // unit that matches the weight system (kg → km, lb → mi).
 const CARDIO_LIB = [
-  { id: "row",   name: "Rower",         icon: "🚣" },
-  { id: "tread", name: "Treadmill",     icon: "🏃" },
-  { id: "bike",  name: "Bike",          icon: "🚴" },
-  { id: "stair", name: "Stair climber", icon: "🪜" },
-  { id: "ellip", name: "Elliptical",    icon: "🌀" },
-  { id: "ski",   name: "Ski erg",       icon: "⛷️" },
+  { id: "row",   name: "Rower",         icon: "🚣", lvl: "damper" },
+  { id: "tread", name: "Treadmill",     icon: "🏃", lvl: "incline %" },
+  { id: "bike",  name: "Bike",          icon: "🚴", lvl: "resistance" },
+  { id: "stair", name: "Stair climber", icon: "🪜", lvl: "level" },
+  { id: "ellip", name: "Elliptical",    icon: "🌀", lvl: "resistance" },
+  { id: "ski",   name: "Ski erg",       icon: "⛷️", lvl: "damper" },
   { id: "run",   name: "Run (outdoor)", icon: "🏞️" },
-  { id: "walk",  name: "Walk / incline",icon: "🚶" },
+  { id: "walk",  name: "Walk / incline",icon: "🚶", lvl: "incline %" },
   { id: "swim",  name: "Swim",          icon: "🏊" },
   { id: "rope",  name: "Jump rope",     icon: "🪢" },
 ];
@@ -3598,6 +3680,13 @@ Object.assign(S, {
   hiitBtnRow: { display: "flex", gap: 10, marginTop: 30 },
   hiitCtl: { background: "rgba(0,0,0,0.3)", border: "1.5px solid rgba(255,255,255,0.35)", color: "#fff", borderRadius: 12, padding: "12px 22px", fontFamily: cond, fontWeight: 700, fontSize: 15, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" },
   presetChip: { background: C.iron3, border: `1px solid ${C.lineSoft}`, color: C.chalk, borderRadius: 20, padding: "7px 13px", fontFamily: cond, fontWeight: 700, fontSize: 12.5, letterSpacing: 0.5, cursor: "pointer" },
+
+  // bodyweight tracker
+  bwRow: { width: "100%", display: "flex", alignItems: "center", gap: 10, background: "none", border: `1px dashed ${C.lineSoft}`, borderRadius: 12, padding: "9px 14px", marginBottom: 12, cursor: "pointer", textAlign: "left" },
+  bwLab: { fontFamily: cond, fontWeight: 700, fontSize: 12.5, letterSpacing: 1, textTransform: "uppercase", color: C.faint, flex: 1 },
+  bwVal: { fontFamily: mono, fontWeight: 700, fontSize: 14, color: C.chalk },
+  bwGhost: { fontFamily: body, fontSize: 12.5, color: C.faint, fontStyle: "italic" },
+  bwSave: { background: C.forge, color: "#1a1206", border: "none", borderRadius: 10, padding: "8px 14px", fontFamily: cond, fontWeight: 700, fontSize: 12.5, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" },
   bwField: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, background: C.iron3, border: `1px solid ${C.line}`, borderRadius: 14, padding: "13px 15px" },
   bwLabel: { fontFamily: cond, fontWeight: 700, fontSize: 16, letterSpacing: 0.5, textTransform: "uppercase", color: C.chalk },
   bwHint: { fontFamily: body, fontSize: 11.5, color: C.faint, marginTop: 2 },
