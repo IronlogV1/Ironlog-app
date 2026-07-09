@@ -198,7 +198,7 @@ async function writeStore(payload) {
 
 /* ============================================================ */
 function IronLog() {
-  const [data, setData] = useState({ unit: "kg", workouts: {}, custom: [], restDays: {}, bodyweight: null, bwLog: {}, freezeDays: {}, templates: [], drops: {} });
+  const [data, setData] = useState({ unit: "kg", workouts: {}, custom: [], restDays: {}, bodyweight: null, bwLog: {}, freezeDays: {}, templates: [], drops: {}, checkins: {} });
   const [loaded, setLoaded] = useState(false);
   const [view, setView] = useState("log"); // log | week | progress | cabinet
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -412,8 +412,25 @@ function IronLog() {
     return hit ? relic : null;
   };
 
+  const logCheckin = (dateIso, kind, obj) =>
+    setData((p) => {
+      const all = { ...(p.checkins || {}) };
+      const day = { ...(all[dateIso] || {}) };
+      if (obj) day[kind] = obj; else delete day[kind];
+      if (day.pre || day.post) all[dateIso] = day; else delete all[dateIso];
+      return { ...p, checkins: all };
+    });
+
+  const [postCheckinOpen, setPostCheckinOpen] = useState(false);
+
   const finishSession = () => {
     flushSave();
+    setPostCheckinOpen(true);
+  };
+
+  const afterPostCheckin = (post) => {
+    setPostCheckinOpen(false);
+    if (post) logCheckin(logDate, "post", post);
     const relic = maybeRollDrop(logDate);
     if (relic) setDropReveal(relic);
     else setShareDay(logDate);
@@ -476,6 +493,7 @@ function IronLog() {
     restDays: obj.restDays && typeof obj.restDays === "object" ? obj.restDays : {},
     bodyweight: typeof obj.bodyweight === "number" ? obj.bodyweight : null,
     bwLog: obj.bwLog && typeof obj.bwLog === "object" ? obj.bwLog : {},
+    checkins: obj.checkins && typeof obj.checkins === "object" ? obj.checkins : {},
     freezeDays: obj.freezeDays && typeof obj.freezeDays === "object" ? obj.freezeDays : {},
     templates: Array.isArray(obj.templates) ? obj.templates : [],
     drops: obj.drops && typeof obj.drops === "object" ? obj.drops : {},
@@ -538,6 +556,7 @@ function IronLog() {
             onUndoRest={clearRestDay}
             onAdd={() => setPickerOpen(true)}
             onLogBW={logBW}
+            onLogCheckin={logCheckin}
             cardio={data.workouts[logDate]?.cardio || []}
             onAddCardio={() => setCardioOpen(true)}
             updateCardio={updateCardio}
@@ -564,6 +583,13 @@ function IronLog() {
           />
         )}
       </main>
+
+      {postCheckinOpen && (
+        <PostCheckin
+          existing={(data.checkins || {})[logDate]?.post}
+          onDone={afterPostCheckin}
+        />
+      )}
 
       {dropReveal && (
         <DropReveal
@@ -662,7 +688,7 @@ function IronLog() {
 }
 
 /* ---------------- Log view ---------------- */
-function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logDate, onChangeDate, dayTime, onChangeTime, restMarked, restKind, onRest, onUndoRest, onAdd, onLogBW, cardio, onAddCardio, updateCardio, removeCardio, onOpenWorkouts, hasTemplates, updateEx, removeEx, startRest, onShare, freezeAvail, onFreeze }) {
+function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logDate, onChangeDate, dayTime, onChangeTime, restMarked, restKind, onRest, onUndoRest, onAdd, onLogBW, onLogCheckin, cardio, onAddCardio, updateCardio, removeCardio, onOpenWorkouts, hasTemplates, updateEx, removeEx, startRest, onShare, freezeAvail, onFreeze }) {
   const isWork = (s) => s.done && !s.warmup;
   const isBackdate = logDate !== today;
   const timeLabel = dayTime ? fmtTime(dayTime) : (isBackdate ? "Add session time" : "Set time");
@@ -682,6 +708,8 @@ function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logD
       <DailyCard data={data} unit={unit} today={today} viewDate={logDate} dayLogged={dayHasWork(data.workouts[logDate])} restMarked={restMarked} restKind={restKind} onRest={onRest} onUndoRest={onUndoRest} loggedToday={dayHasWork(data.workouts[today])} freezeAvail={freezeAvail} onFreeze={onFreeze} />
 
       <BWChip data={data} unit={unit} logDate={logDate} onLog={onLogBW} />
+
+      <ReadinessChip data={data} logDate={logDate} onLog={onLogCheckin} />
 
       <div style={S.dateRow}>
         <div>
@@ -928,6 +956,100 @@ function HIITTimer({ onClose, onLog }) {
   );
 }
 
+/* ---------------- Session check-ins ---------------- */
+function DotScale({ label, value, onPick }) {
+  return (
+    <div style={S.ciRow}>
+      <span style={S.ciLab}>{label}</span>
+      <div style={{ display: "flex", gap: 6 }}>
+        {[1, 2, 3, 4, 5].map((n) => (
+          <button key={n} style={{ ...S.ciDot, ...(value >= n ? S.ciDotOn : {}) }} onClick={() => onPick(n)}>{n}</button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ReadinessChip({ data, logDate, onLog }) {
+  const pre = (data.checkins || {})[logDate]?.pre;
+  const [open, setOpen] = useState(false);
+  const [f, setF] = useState({ energy: 0, sleep: 0, soreness: 0, note: "" });
+  const begin = () => { setF(pre ? { ...pre, note: pre.note || "" } : { energy: 0, sleep: 0, soreness: 0, note: "" }); setOpen(true); };
+  const canSave = f.energy > 0 && f.sleep > 0 && f.soreness > 0;
+  const save = () => {
+    if (!canSave) return;
+    onLog(logDate, "pre", { energy: f.energy, sleep: f.sleep, soreness: f.soreness, note: f.note.trim() || undefined });
+    setOpen(false);
+  };
+  if (open) {
+    return (
+      <div style={S.ciCard}>
+        <div style={S.ciHead}>How are you feeling?</div>
+        <DotScale label="Energy" value={f.energy} onPick={(n) => setF((p) => ({ ...p, energy: n }))} />
+        <DotScale label="Sleep" value={f.sleep} onPick={(n) => setF((p) => ({ ...p, sleep: n }))} />
+        <DotScale label="Soreness" value={f.soreness} onPick={(n) => setF((p) => ({ ...p, soreness: n }))} />
+        <input
+          style={{ ...S.search, marginTop: 8 }}
+          placeholder="Note — optional"
+          value={f.note}
+          onChange={(e) => setF((p) => ({ ...p, note: e.target.value }))}
+        />
+        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+          <button style={{ ...S.bwSave, flex: 1, opacity: canSave ? 1 : 0.45 }} onClick={save}>Save check-in</button>
+          <button style={S.iconBtn} onClick={() => setOpen(false)}>✕</button>
+        </div>
+      </div>
+    );
+  }
+  if (pre) {
+    const r = readinessScore(pre);
+    return (
+      <button style={S.bwRow} onClick={begin}>
+        <span style={S.bwLab}>☀ Readiness</span>
+        <span style={{ ...S.bwVal, color: r >= 70 ? C.green : r >= 40 ? C.chalk : C.forge }}>{r}% · {readinessBand(r)}</span>
+      </button>
+    );
+  }
+  return (
+    <button style={S.bwRow} onClick={begin}>
+      <span style={S.bwLab}>☀ How are you feeling?</span>
+      <span style={S.bwGhost}>check in — optional</span>
+    </button>
+  );
+}
+
+function PostCheckin({ existing, onDone }) {
+  const [rpe, setRpe] = useState(existing ? existing.rpe : 0);
+  const [note, setNote] = useState(existing ? existing.note || "" : "");
+  return (
+    <div style={S.sheetBackdrop}>
+      <div style={{ ...S.dropCard, textAlign: "left" }} onClick={(e) => e.stopPropagation()}>
+        <div style={S.dropEyebrow}>Session check-in</div>
+        <div style={{ ...S.ciHead, marginTop: 10 }}>How hard was that, honestly?</div>
+        <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 8 }}>
+          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
+            <button key={n} style={{ ...S.ciDot, ...(rpe === n ? S.ciDotOn : {}) }} onClick={() => setRpe(n)}>{n}</button>
+          ))}
+        </div>
+        <div style={S.ciScaleHint}>1 = stroll · 10 = nothing left</div>
+        <input
+          style={{ ...S.search, marginTop: 10 }}
+          placeholder="Note — optional"
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+        />
+        <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+          <button
+            style={{ ...S.dropBtn, flex: 1, opacity: rpe > 0 ? 1 : 0.45 }}
+            onClick={() => { if (rpe > 0) onDone({ rpe, note: note.trim() || undefined }); }}
+          >Save →</button>
+          <button style={S.hiitCtlDark} onClick={() => onDone(null)}>Skip</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ---------------- Bodyweight tracker ---------------- */
 function BWChip({ data, unit, logDate, onLog }) {
   const kg = (data.bwLog || {})[logDate];
@@ -1123,7 +1245,9 @@ function ExerciseCard({ ex, unit, rec, update, remove, startRest }) {
             ) : (
               <button style={S.recChip} onClick={applyRec}>
                 🎯 {rec.mode === "load"
-                  ? `Step up: ${rec.weight} ${unit} — aim ${rec.reps}+ reps on every set`
+                  ? `Step up: ${rec.weight} ${unit} — aim ${rec.reps}+ reps on every set${rec.why ? ` (${rec.why})` : ""}`
+                  : rec.mode === "hold"
+                  ? `Hold: ${rec.weight} ${unit} — ${rec.reps}+ reps again (${rec.why})`
                   : `Beat last time: ${rec.weight} ${unit} — get ${rec.reps}+ reps on every set`}
               </button>
             )
@@ -1945,6 +2069,12 @@ const dayHasWork = (day) =>
     (day.cardio || []).some((c) => (c.minutes || 0) > 0 || (c.km || 0) > 0)
   );
 
+// Subjective readiness — the wearable-free equivalent of a recovery score.
+// energy + sleep + inverted soreness, each 1–5, mapped to 0–100.
+const readinessScore = (pre) =>
+  pre ? Math.round(((pre.energy + pre.sleep + (6 - pre.soreness)) / 15) * 100) : null;
+const readinessBand = (r) => (r >= 70 ? "primed" : r >= 40 ? "steady" : "low — go easy");
+
 // Cardio machines and modalities. Distance is stored in km and shown in the
 // unit that matches the weight system (kg → km, lb → mi).
 const CARDIO_LIB = [
@@ -2139,10 +2269,10 @@ const OVERLOAD_WINDOWS = {
 function overloadFor(data, exId, category, beforeDate, unit) {
   const cutoff = addDaysISO(beforeDate, -21);
   const dates = Object.keys(data.workouts).filter((d) => d < beforeDate && d >= cutoff).sort().reverse();
-  let found = null;
+  let found = null, foundDate = null;
   for (const d of dates) {
     const e = data.workouts[d].exercises.find((x) => x.id === exId && x.sets.some((s) => s.done && !s.warmup && (s.reps || 0) > 0));
-    if (e) { found = e; break; }
+    if (e) { found = e; foundDate = d; break; }
   }
   if (!found) return null;
   const work = found.sets.filter((s) => s.done && !s.warmup && (s.reps || 0) > 0);
@@ -2152,11 +2282,26 @@ function overloadFor(data, exId, category, beforeDate, unit) {
   const atTop = work.filter((s) => inUnit(s, unit) === topW);
   const minReps = Math.min(...atTop.map((s) => s.reps || 0));
   const step = STEP[unit];
-  if (minReps >= hi) {
+
+  // Autoregulation — session RPE of the reference day + today's readiness
+  const ci = data.checkins || {};
+  const refRpe = ci[foundDate]?.post?.rpe || null;
+  const readiness = readinessScore(ci[beforeDate]?.pre);
+  const brutal = refRpe !== null && refRpe >= 9;
+  const lowToday = readiness !== null && readiness < 40;
+  const easy = refRpe !== null && refRpe <= 5;
+
+  const earnedStep = minReps >= hi || (easy && minReps >= hi - 1);   // easy sessions unlock one rep early
+  if (earnedStep) {
+    if (brutal || lowToday) {
+      return { mode: "hold", weight: r1(topW), reps: hi, hi, prevW: topW, prevR: minReps,
+               why: brutal ? "last one was a grinder" : "low readiness today" };
+    }
     const inc = Math.max(step, Math.ceil((topW * 0.025) / step) * step);
-    return { mode: "load", weight: r1(topW + inc), reps: lo, hi, prevW: topW, prevR: minReps };
+    return { mode: "load", weight: r1(topW + inc), reps: lo, hi, prevW: topW, prevR: minReps,
+             why: easy && minReps < hi ? "last one was easy — early step" : null };
   }
-  return { mode: "reps", weight: r1(topW), reps: Math.min(hi, minReps + 1), hi, prevW: topW, prevR: minReps };
+  return { mode: "reps", weight: r1(topW), reps: Math.min(hi, minReps + 1), hi, prevW: topW, prevR: minReps, why: null };
 }
 
 // CD6 — scarcity. One limited-edition badge per calendar month. Earn it inside
@@ -3687,6 +3832,16 @@ Object.assign(S, {
   bwVal: { fontFamily: mono, fontWeight: 700, fontSize: 14, color: C.chalk },
   bwGhost: { fontFamily: body, fontSize: 12.5, color: C.faint, fontStyle: "italic" },
   bwSave: { background: C.forge, color: "#1a1206", border: "none", borderRadius: 10, padding: "8px 14px", fontFamily: cond, fontWeight: 700, fontSize: 12.5, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" },
+
+  // session check-ins
+  ciCard: { border: `1px dashed ${C.lineSoft}`, borderRadius: 12, padding: "12px 14px", marginBottom: 12 },
+  ciHead: { fontFamily: cond, fontWeight: 700, fontSize: 14, letterSpacing: 0.8, textTransform: "uppercase", color: C.chalk },
+  ciRow: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginTop: 10 },
+  ciLab: { fontFamily: cond, fontSize: 11, letterSpacing: 1.5, textTransform: "uppercase", color: C.faint },
+  ciDot: { width: 34, height: 34, borderRadius: 17, background: C.iron3, border: `1px solid ${C.lineSoft}`, color: C.faint, fontFamily: mono, fontWeight: 700, fontSize: 13, cursor: "pointer" },
+  ciDotOn: { background: C.forge, borderColor: C.forge, color: "#1a1206" },
+  ciScaleHint: { fontFamily: body, fontSize: 11, color: C.faint, marginTop: 6 },
+  hiitCtlDark: { background: "none", border: `1px solid ${C.lineSoft}`, color: C.faint, borderRadius: 12, padding: "12px 18px", fontFamily: cond, fontWeight: 700, fontSize: 13, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" },
   bwField: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, background: C.iron3, border: `1px solid ${C.line}`, borderRadius: 14, padding: "13px 15px" },
   bwLabel: { fontFamily: cond, fontWeight: 700, fontSize: 16, letterSpacing: 0.5, textTransform: "uppercase", color: C.chalk },
   bwHint: { fontFamily: body, fontSize: 11.5, color: C.faint, marginTop: 2 },
