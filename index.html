@@ -2790,7 +2790,8 @@ function CabinetView({ data, unit, today, onSetBodyweight, onImport, onBackedUp 
                 React.createElement("div", { style: S.emptyMark }, "\u25A3"),
                 React.createElement("div", { style: S.emptyTitle }, "Your cabinet is empty"),
                 React.createElement("div", { style: S.emptySub }, "Log your first session \u2014 or import a backup below.")),
-            React.createElement(BackupPanel, { data: data, onImport: onImport, onBackedUp: onBackedUp })));
+            React.createElement(BackupPanel, { data: data, onImport: onImport, onBackedUp: onBackedUp }),
+            React.createElement("a", { href: "https://buymeacoffee.com/ironlogapp", target: "_blank", rel: "noopener noreferrer", style: S.coffeeBtn }, "\u2615 Enjoying IRONLOG? Shout the smith a coffee")));
     const bwKg = data.bodyweight || 0;
     const bwSet = bwKg > 0;
     const curRank = rankFor(fs.sessions);
@@ -2885,7 +2886,8 @@ function CabinetView({ data, unit, today, onSetBodyweight, onImport, onBackedUp 
                         unit))),
             bwKg > 0 && board.some(b => strengthPct(b.id, b.best, bwKg) !== null) && (React.createElement("div", { style: S.pctDisclaimer }, "Percentiles are estimates vs. the adult male population (incl. non-lifters), based on bodyweight-ratio strength standards.")),
             !bwSet && board.some(b => EX_CURVE_MAP[b.id]) && (React.createElement("div", { style: S.pctDisclaimer }, "Set your bodyweight above to see how your lifts compare to the adult male population.")))),
-        React.createElement(BackupPanel, { data: data, onImport: onImport, onBackedUp: onBackedUp })));
+        React.createElement(BackupPanel, { data: data, onImport: onImport, onBackedUp: onBackedUp }),
+        React.createElement("a", { href: "https://buymeacoffee.com/ironlogapp", target: "_blank", rel: "noopener noreferrer", style: S.coffeeBtn }, "\u2615 Enjoying IRONLOG? Shout the smith a coffee")));
 }
 function Cell({ big, label, accent }) {
     return (React.createElement("div", { style: S.cell },
@@ -3346,7 +3348,8 @@ Object.assign(S, {
     bwInput: { width: 56, background: "none", border: "none", color: C.forge, fontFamily: mono, fontWeight: 700, fontSize: 19, textAlign: "right", outline: "none", padding: 0, MozAppearance: "textfield" },
     bwUnit: { fontFamily: cond, fontSize: 12, letterSpacing: 1, textTransform: "uppercase", color: C.dim },
     bkp: { marginTop: 8 },
-    ssTag: { display: "inline-block", marginTop: 6, border: `1px dashed ${C.forgeDeep}`, color: C.forge, borderRadius: 20, padding: "4px 11px", fontFamily: cond, fontWeight: 700, fontSize: 11, letterSpacing: 0.8 },
+    coffeeBtn: { display: "block", textAlign: "center", marginTop: 22, marginBottom: 8, padding: "12px 14px", border: `1px dashed ${C.lineSoft}`, borderRadius: 12, color: C.faint, fontFamily: cond, fontWeight: 700, fontSize: 12.5, letterSpacing: 1, textTransform: "uppercase", textDecoration: "none" },
+  ssTag: { display: "inline-block", marginTop: 6, border: `1px dashed ${C.forgeDeep}`, color: C.forge, borderRadius: 20, padding: "4px 11px", fontFamily: cond, fontWeight: 700, fontSize: 11, letterSpacing: 0.8 },
   hmBest: { fontFamily: cond, fontWeight: 700, fontSize: 13, letterSpacing: 0.6, color: C.green, marginBottom: 10 },
   hmGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 8 },
   hmTile: { background: C.iron3, border: `1px solid ${C.lineSoft}`, borderRadius: 12, padding: "10px 12px" },
