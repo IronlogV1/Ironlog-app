@@ -18,7 +18,8 @@
 </head>
 <body>
   <div id="root"></div>
-  <script>
+  <script data-goatcounter="https://ironlogapp.goatcounter.com/count" async src="https://gc.zgo.at/count.js"></script>
+<script>
 // Offline resilience: cache-first app shell via service worker
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => { navigator.serviceWorker.register("./sw.js").catch(() => {}); });
@@ -209,7 +210,7 @@ async function writeStore(payload) {
 /* ============================================================ */
 function IronLog() {
     var _a, _b, _c, _d, _e, _f;
-    const [data, setData] = useState({ unit: "kg", workouts: {}, custom: [], restDays: {}, bodyweight: null, bwLog: {}, freezeDays: {}, templates: [], drops: {}, checkins: {}, restPrefs: {}, lastBackup: null });
+    const [data, setData] = useState({ unit: "kg", workouts: {}, custom: [], restDays: {}, bodyweight: null, bwLog: {}, freezeDays: {}, templates: [], drops: {}, checkins: {}, restPrefs: {}, lastBackup: null, coffeeAsks: {} });
     const [loaded, setLoaded] = useState(false);
     const [view, setView] = useState("log"); // log | week | progress | cabinet
     const [pickerOpen, setPickerOpen] = useState(false);
@@ -484,12 +485,26 @@ function IronLog() {
     };
     const finishSession = () => {
         flushSave();
+        try { if (window.goatcounter && window.goatcounter.count) window.goatcounter.count({ path: "session-finished", title: "Session finished", event: true }); } catch (e) {}
         setPostCheckinOpen(true);
     };
+    const [coffeeAsk, setCoffeeAsk] = useState(null);
+    const [pendingCoffee, setPendingCoffee] = useState(null);
+    const markCoffeeAsk = (key) => setData((p) => ({ ...p, coffeeAsks: { ...(p.coffeeAsks || {}), [key]: true } }));
     const afterPostCheckin = (post) => {
         setPostCheckinOpen(false);
         if (post)
             logCheckin(logDate, "post", post);
+        // Milestone gratitude ask — fires once per milestone, after the share
+        // card is dismissed, never mid-session. "Don't ask again" is forever.
+        const asks = data.coffeeAsks || {};
+        if (!asks.never) {
+            const sessions = Object.keys(data.workouts).filter((d) => dayHasWork(data.workouts[d])).length;
+            const st = dailyStreak(data, today);
+            if (sessions === 10 && !asks.s10) setPendingCoffee({ key: "s10", line: "Ten sessions forged." });
+            else if (st === 30 && !asks.streak30) setPendingCoffee({ key: "streak30", line: "Thirty days straight. That's a habit now." });
+            else if (st === 100 && !asks.streak100) setPendingCoffee({ key: "streak100", line: "One hundred days. Legendary consistency." });
+        }
         const relic = maybeRollDrop(logDate);
         if (relic)
             setDropReveal(relic);
@@ -555,6 +570,7 @@ function IronLog() {
         checkins: obj.checkins && typeof obj.checkins === "object" ? obj.checkins : {},
         restPrefs: obj.restPrefs && typeof obj.restPrefs === "object" ? obj.restPrefs : {},
         lastBackup: Date.now(),
+    coffeeAsks: obj.coffeeAsks && typeof obj.coffeeAsks === "object" ? obj.coffeeAsks : {},
         freezeDays: obj.freezeDays && typeof obj.freezeDays === "object" ? obj.freezeDays : {},
         templates: Array.isArray(obj.templates) ? obj.templates : [],
         drops: obj.drops && typeof obj.drops === "object" ? obj.drops : {},
@@ -588,6 +604,7 @@ function IronLog() {
                 React.createElement(Tab, { active: view === "progress", onClick: () => setView("progress") }, "Progress"),
                 React.createElement(Tab, { active: view === "cabinet", onClick: () => setView("cabinet") }, "Cabinet"))),
         React.createElement("main", { style: S.main }, !loaded ? (React.createElement("div", { style: S.loading }, "Loading the rack\u2026")) : view === "log" ? (React.createElement(LogView, { dateLabel: headDate(logDate), exercises: logEx, todayExercises: todayEx, unit: unit, data: data, today: today, logDate: logDate, onChangeDate: setLogDate, dayTime: ((_c = data.workouts[logDate]) === null || _c === void 0 ? void 0 : _c.time) || "", onChangeTime: setDayTime, restMarked: restMarked, restKind: restKind, onRest: markRestDay, onUndoRest: clearRestDay, onAdd: () => setPickerOpen(true), onSetDone: handleSetDone, onRestPref: setRestPref, onLogBW: logBW, onLogCheckin: logCheckin, cardio: ((_d = data.workouts[logDate]) === null || _d === void 0 ? void 0 : _d.cardio) || [], onAddCardio: () => setCardioOpen(true), updateCardio: updateCardio, removeCardio: removeCardio, onOpenWorkouts: () => setWorkoutsOpen(true), hasTemplates: (data.templates || []).length > 0, updateEx: updateEx, removeEx: removeEx, startRest: (s) => setRest({ seconds: s, total: s }), onShare: finishSession, freezeAvail: freezeAvail, onFreeze: useFreeze })) : view === "week" ? (React.createElement(WeekView, { data: data, unit: unit, today: today, onShareMonth: (m) => setShareMonth(m) })) : view === "cabinet" ? (React.createElement(CabinetView, { data: data, unit: unit, today: today, onSetBodyweight: setBodyweight, onImport: importData, onBackedUp: () => setData((p) => ({ ...p, lastBackup: Date.now() })) })) : (React.createElement(ProgressView, { data: data, unit: unit, progId: progId, setProgId: setProgId }))),
+        coffeeAsk && (React.createElement(CoffeeAsk, { ask: coffeeAsk, onPick: (action) => { if (action === "never") markCoffeeAsk("never"); else markCoffeeAsk(coffeeAsk.key); setCoffeeAsk(null); } })),
         prPop && (React.createElement(PRPop, { pop: prPop, unit: unit, onClose: () => { const rs = prPop.restSecs; setPrPop(null); if (rs > 0) setRest({ seconds: rs, total: rs }); } })),
         postCheckinOpen && (React.createElement(PostCheckin, { existing: (_e = (data.checkins || {})[logDate]) === null || _e === void 0 ? void 0 : _e.post, onDone: afterPostCheckin })),
         dropReveal && (React.createElement(DropReveal, { relicId: dropReveal, onClose: () => { setDropReveal(null); setShareDay(logDate); } })),
@@ -612,7 +629,7 @@ function IronLog() {
         pickerOpen && (React.createElement(Picker, { lib: lib, recentIds: recentIds, onPick: addExercise, onCreate: addCustom, onUpdate: updateCustom, onDelete: deleteCustom, onClose: () => setPickerOpen(false) })),
         rest && (React.createElement(RestTimer, { state: rest, onTick: (s) => setRest((r) => (r ? { ...r, seconds: s } : r)), onSet: (s) => setRest({ seconds: s, total: s }), onClose: () => setRest(null) })),
         shareMonth && (React.createElement(MonthlyReport, { data: data, unit: unit, yearMonth: shareMonth, onClose: () => setShareMonth(null) })),
-        shareDay && (React.createElement(SessionShare, { data: data, unit: unit, dateIso: shareDay, saveState: saveState, lastSaved: lastSaved, storagePresent: storagePresent, onRetry: flushSave, onClose: () => setShareDay(null) }))));
+        shareDay && (React.createElement(SessionShare, { data: data, unit: unit, dateIso: shareDay, saveState: saveState, lastSaved: lastSaved, storagePresent: storagePresent, onRetry: flushSave, onClose: () => { setShareDay(null); if (pendingCoffee) { setCoffeeAsk(pendingCoffee); setPendingCoffee(null); } } }))));
 }
 /* ---------------- Log view ---------------- */
 function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logDate, onChangeDate, dayTime, onChangeTime, restMarked, restKind, onRest, onUndoRest, onAdd, onSetDone, onRestPref, onLogBW, onLogCheckin, cardio, onAddCardio, updateCardio, removeCardio, onOpenWorkouts, hasTemplates, updateEx, removeEx, startRest, onShare, freezeAvail, onFreeze }) {
@@ -809,6 +826,17 @@ function HIITTimer({ onClose, onLog }) {
             React.createElement("button", { style: S.hiitCtl, onClick: endEarly }, "End \u2715"))));
 }
 /* ---------------- PR celebration ---------------- */
+function CoffeeAsk({ ask, onPick }) {
+    return (React.createElement("div", { style: S.sheetBackdrop },
+        React.createElement("div", { style: { ...S.dropCard, textAlign: "center" }, onClick: (e) => e.stopPropagation() },
+            React.createElement("div", { style: S.dropEyebrow }, "\u2615 From the smith"),
+            React.createElement("div", { style: { ...S.dropName, marginTop: 14 } }, ask.line),
+            React.createElement("div", { style: S.dropLore }, "IRONLOG is free forever \u2014 no ads, no accounts. If it's earned a place in your gym bag, you can shout the smith a coffee."),
+            React.createElement("a", { href: "https://buymeacoffee.com/ironlogapp", target: "_blank", rel: "noopener noreferrer", style: { ...S.dropBtn, display: "block", textDecoration: "none" }, onClick: () => onPick("asked") }, "\u2615 Shout a coffee"),
+            React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 10 } },
+                React.createElement("button", { style: { ...S.hiitCtlDark, flex: 1 }, onClick: () => onPick("asked") }, "Maybe later"),
+                React.createElement("button", { style: { ...S.hiitCtlDark, flex: 1 }, onClick: () => onPick("never") }, "Don't ask again")))));
+}
 function PRPop({ pop, unit, onClose }) {
     const weightTier = pop.tier === "weight";
     return (React.createElement("div", { style: S.sheetBackdrop, onClick: onClose },
@@ -2480,6 +2508,7 @@ function WeekView({ data, unit, today, onShareMonth }) {
                             React.createElement("span", { style: { color: C.faint } }, "est. 1RM"))))))),
                 React.createElement("div", { style: S.cardFoot }, "Tracked with IRONLOG")),
             React.createElement(ShareActions, { text: shareText }),
+            React.createElement("a", { href: "https://buymeacoffee.com/ironlogapp", target: "_blank", rel: "noopener noreferrer", style: S.coffeeBtn }, "\u2615 Free forever \u2014 shout the smith a coffee"),
             ghost && (React.createElement("div", { style: S.ghostRow },
                 React.createElement("span", { style: S.ghostIcon }, "\uD83D\uDC7B"),
                 React.createElement("span", { style: S.ghostText }, ghost.pct >= 0
@@ -3348,7 +3377,7 @@ Object.assign(S, {
     bwInput: { width: 56, background: "none", border: "none", color: C.forge, fontFamily: mono, fontWeight: 700, fontSize: 19, textAlign: "right", outline: "none", padding: 0, MozAppearance: "textfield" },
     bwUnit: { fontFamily: cond, fontSize: 12, letterSpacing: 1, textTransform: "uppercase", color: C.dim },
     bkp: { marginTop: 8 },
-    coffeeBtn: { display: "block", textAlign: "center", marginTop: 22, marginBottom: 8, padding: "12px 14px", border: `1px dashed ${C.lineSoft}`, borderRadius: 12, color: C.faint, fontFamily: cond, fontWeight: 700, fontSize: 12.5, letterSpacing: 1, textTransform: "uppercase", textDecoration: "none" },
+    coffeeBtn: { display: "block", textAlign: "center", marginTop: 22, marginBottom: 8, padding: "13px 14px", border: `1.5px solid ${C.forgeDeep}`, background: "rgba(224,163,60,0.07)", borderRadius: 12, color: C.forge, fontFamily: cond, fontWeight: 700, fontSize: 13, letterSpacing: 1, textTransform: "uppercase", textDecoration: "none" },
   ssTag: { display: "inline-block", marginTop: 6, border: `1px dashed ${C.forgeDeep}`, color: C.forge, borderRadius: 20, padding: "4px 11px", fontFamily: cond, fontWeight: 700, fontSize: 11, letterSpacing: 0.8 },
   hmBest: { fontFamily: cond, fontWeight: 700, fontSize: 13, letterSpacing: 0.6, color: C.green, marginBottom: 10 },
   hmGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 8 },
