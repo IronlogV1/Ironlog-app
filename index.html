@@ -478,10 +478,11 @@ function IronLog() {
         });
         const eNow = e1rm(set, "kg");
         const tier = bestW > 0 && wKg > bestW ? "weight" : bestE > 0 && eNow > bestE ? "e1rm" : null;
+        // Rest fires the instant a working set is ticked. A PR card (if any) sits
+        // on top of the already-counting timer, so dismissing it reveals the clock.
+        beginRest();
         if (tier)
-            setPrPop({ tier, name: ex.name, w: fmt(inUnit(set, unit)), reps: set.reps || 0, restSecs: effRest });
-        else
-            beginRest();
+            setPrPop({ tier, name: ex.name, w: fmt(inUnit(set, unit)), reps: set.reps || 0 });
     };
     const finishSession = () => {
         flushSave();
@@ -605,8 +606,8 @@ function IronLog() {
                 React.createElement(Tab, { active: view === "cabinet", onClick: () => setView("cabinet") }, "Cabinet"))),
         React.createElement("main", { style: S.main }, !loaded ? (React.createElement("div", { style: S.loading }, "Loading the rack\u2026")) : view === "log" ? (React.createElement(LogView, { dateLabel: headDate(logDate), exercises: logEx, todayExercises: todayEx, unit: unit, data: data, today: today, logDate: logDate, onChangeDate: setLogDate, dayTime: ((_c = data.workouts[logDate]) === null || _c === void 0 ? void 0 : _c.time) || "", onChangeTime: setDayTime, restMarked: restMarked, restKind: restKind, onRest: markRestDay, onUndoRest: clearRestDay, onAdd: () => setPickerOpen(true), onSetDone: handleSetDone, onRestPref: setRestPref, onLogBW: logBW, onLogCheckin: logCheckin, cardio: ((_d = data.workouts[logDate]) === null || _d === void 0 ? void 0 : _d.cardio) || [], onAddCardio: () => setCardioOpen(true), updateCardio: updateCardio, removeCardio: removeCardio, onOpenWorkouts: () => setWorkoutsOpen(true), hasTemplates: (data.templates || []).length > 0, updateEx: updateEx, removeEx: removeEx, startRest: (s) => setRest({ seconds: s, total: s }), onShare: finishSession, freezeAvail: freezeAvail, onFreeze: useFreeze })) : view === "week" ? (React.createElement(WeekView, { data: data, unit: unit, today: today, onShareMonth: (m) => setShareMonth(m) })) : view === "cabinet" ? (React.createElement(CabinetView, { data: data, unit: unit, today: today, onSetBodyweight: setBodyweight, onImport: importData, onBackedUp: () => setData((p) => ({ ...p, lastBackup: Date.now() })) })) : (React.createElement(ProgressView, { data: data, unit: unit, progId: progId, setProgId: setProgId }))),
         coffeeAsk && (React.createElement(CoffeeAsk, { ask: coffeeAsk, onPick: (action) => { if (action === "never") markCoffeeAsk("never"); else markCoffeeAsk(coffeeAsk.key); setCoffeeAsk(null); } })),
-        prPop && (React.createElement(PRPop, { pop: prPop, unit: unit, onClose: () => { const rs = prPop.restSecs; setPrPop(null); if (rs > 0) setRest({ seconds: rs, total: rs }); } })),
-        postCheckinOpen && (React.createElement(PostCheckin, { existing: (_e = (data.checkins || {})[logDate]) === null || _e === void 0 ? void 0 : _e.post, onDone: afterPostCheckin })),
+        prPop && (React.createElement(PRPop, { pop: prPop, unit: unit, onClose: () => setPrPop(null) })),
+        postCheckinOpen && (React.createElement(PostCheckin, { existing: (_e = (data.checkins || {})[logDate]) === null || _e === void 0 ? void 0 : _e.post, onDone: afterPostCheckin, onCancel: () => setPostCheckinOpen(false) })),
         dropReveal && (React.createElement(DropReveal, { relicId: dropReveal, onClose: () => { setDropReveal(null); setShareDay(logDate); } })),
         cardioOpen && (React.createElement("div", { style: S.sheetBackdrop, onClick: () => setCardioOpen(false) },
             React.createElement("div", { style: S.sheet, onClick: (e) => e.stopPropagation() },
@@ -839,7 +840,7 @@ function CoffeeAsk({ ask, onPick }) {
 }
 function PRPop({ pop, unit, onClose }) {
     const weightTier = pop.tier === "weight";
-    return (React.createElement("div", { style: S.sheetBackdrop, onClick: onClose },
+    return (React.createElement("div", { style: { ...S.sheetBackdrop, zIndex: 50 }, onClick: onClose },
         React.createElement("div", { style: { ...S.dropCard, borderColor: weightTier ? C.forge : C.lineSoft, borderWidth: weightTier ? 3 : 2 }, onClick: (e) => e.stopPropagation() },
             React.createElement("div", { style: { ...S.dropEyebrow, color: weightTier ? C.forge : C.faint } }, weightTier ? "🏆 New weight record" : "📈 New rep record"),
             React.createElement("div", { style: S.dropIcon }, weightTier ? "🏆" : "📈"),
@@ -899,12 +900,14 @@ function ReadinessChip({ data, logDate, onLog }) {
         React.createElement("span", { style: S.bwLab }, "\u2600 How are you feeling?"),
         React.createElement("span", { style: S.bwGhost }, "check in \u2014 optional")));
 }
-function PostCheckin({ existing, onDone }) {
+function PostCheckin({ existing, onDone, onCancel }) {
     const [rpe, setRpe] = useState(existing ? existing.rpe : 0);
     const [note, setNote] = useState(existing ? existing.note || "" : "");
-    return (React.createElement("div", { style: S.sheetBackdrop },
+    return (React.createElement("div", { style: S.sheetBackdrop, onClick: onCancel },
         React.createElement("div", { style: { ...S.dropCard, textAlign: "left" }, onClick: (e) => e.stopPropagation() },
-            React.createElement("div", { style: S.dropEyebrow }, "Session check-in"),
+            React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between" } },
+                React.createElement("div", { style: S.dropEyebrow }, "Session check-in"),
+                React.createElement("button", { style: S.iconBtn, "aria-label": "Back to session \u2014 don't finish yet", onClick: onCancel }, "\u2715")),
             React.createElement("div", { style: { ...S.ciHead, marginTop: 10 } }, "How hard was that, honestly?"),
             React.createElement("div", { style: { display: "flex", gap: 5, flexWrap: "wrap", marginTop: 8 } }, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (React.createElement("button", { key: n, style: { ...S.ciDot, ...(rpe === n ? S.ciDotOn : {}) }, onClick: () => setRpe(n) }, n)))),
             React.createElement("div", { style: S.ciScaleHint }, "1 = stroll \u00B7 10 = nothing left"),
@@ -912,7 +915,8 @@ function PostCheckin({ existing, onDone }) {
             React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 14 } },
                 React.createElement("button", { style: { ...S.dropBtn, flex: 1, opacity: rpe > 0 ? 1 : 0.45 }, onClick: () => { if (rpe > 0)
                         onDone({ rpe, note: note.trim() || undefined }); } }, "Save \u2192"),
-                React.createElement("button", { style: S.hiitCtlDark, onClick: () => onDone(null) }, "Skip")))));
+                React.createElement("button", { style: S.hiitCtlDark, onClick: () => onDone(null) }, "Skip")),
+            React.createElement("button", { style: { ...S.hiitCtlDark, width: "100%", marginTop: 8 }, onClick: onCancel }, "\u2039 Not done \u2014 back to session"))));
 }
 /* ---------------- Bodyweight tracker ---------------- */
 function BWChip({ data, unit, logDate, onLog }) {
@@ -1172,41 +1176,41 @@ function ExerciseCard({ ex, unit, rec, restSecs, hasPrev, prevName, onDone, onRe
         return uni ? sideText(s) : String(wc);
     });
     return (React.createElement("div", { style: S.card },
-        React.createElement("div", { style: S.cardHead },
-            React.createElement("div", null,
+        React.createElement("div", { style: { ...S.cardHead, marginBottom: 10 } },
+            React.createElement("div", { style: { minWidth: 0, flex: 1, marginRight: 8 } },
                 React.createElement("div", { style: S.exName }, ex.name),
                 React.createElement("div", { style: S.exCat },
                     ex.category,
-                    ex.fromLast && React.createElement("span", { style: S.lastTag }, "\u00B7 prefilled from last time")),
-                ex.ssWithPrev && hasPrev ? React.createElement("div", { style: S.ssTag }, "\u26D3 superset with " + prevName + " \u2014 no rest between") : null,
-                rec && (recApplied ? (React.createElement("div", { style: S.recChipDone },
-                    "\uD83C\uDFAF Target set \u2014 ",
-                    rec.weight,
-                    " ",
-                    unit,
-                    ", ",
-                    rec.reps,
-                    rec.mode === "reps" ? `–${rec.hi}` : "+",
-                    " reps on every working set")) : (React.createElement("button", { style: S.recChip, onClick: applyRec },
-                    "\uD83C\uDFAF ",
-                    rec.mode === "load"
-                        ? `Step up: ${rec.weight} ${unit} — aim ${rec.reps}+ reps on every set${rec.why ? ` (${rec.why})` : ""}`
-                        : rec.mode === "hold"
-                            ? `Hold: ${rec.weight} ${unit} — ${rec.reps}+ reps again (${rec.why})`
-                            : `Beat last time: ${rec.weight} ${unit} — get ${rec.reps}+ reps on every set`))),
-                restOpen && (React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginTop: 8 } },
-                    React.createElement("span", { style: S.plateLabel }, "rest between sets"),
-                    React.createElement("button", { style: S.stepBtn, onClick: () => onRestPref(Math.max(15, restSecs - 15)) }, "\u2212"),
-                    React.createElement("span", { style: { fontFamily: mono, fontWeight: 700, fontSize: 14, color: C.forge, minWidth: 44, textAlign: "center" } }, mmss(restSecs)),
-                    React.createElement("button", { style: S.stepBtn, onClick: () => onRestPref(Math.min(600, restSecs + 15)) }, "+")))),
-            React.createElement("div", { style: S.cardHeadBtns },
-                hasPrev ? React.createElement("button", { style: { ...S.uniToggle, ...(ex.ssWithPrev ? S.uniToggleOn : {}) }, "aria-label": "Superset with the exercise above", onClick: toggleSS }, "\u26D3 ss") : null,
-                React.createElement("button", { style: { ...S.uniToggle, ...(restOpen ? S.uniToggleOn : {}) }, "aria-label": "Rest time between sets", onClick: () => setRestOpen((o) => !o) },
-                    "\u23F2 ",
-                    mmss(restSecs)),
-                React.createElement("button", { style: { ...S.uniToggle, ...(ex.timed ? S.uniToggleOn : {}) }, "aria-label": "Toggle time-based sets", onClick: toggleTimed }, "\u23F1 time"),
-                React.createElement("button", { style: { ...S.uniToggle, ...(uni ? S.uniToggleOn : {}) }, "aria-label": "Toggle per-side tracking", onClick: toggleUni }, "\u21C4 per side"),
-                React.createElement("button", { style: S.iconBtn, "aria-label": "Remove exercise", onClick: remove }, "\u2715"))),
+                    ex.fromLast && React.createElement("span", { style: S.lastTag }, "\u00B7 prefilled from last time"))),
+            React.createElement("button", { style: S.iconBtn, "aria-label": "Remove exercise", onClick: remove }, "\u2715")),
+        React.createElement("div", { style: S.exControls },
+            hasPrev ? React.createElement("button", { style: { ...S.uniToggle, ...(ex.ssWithPrev ? S.uniToggleOn : {}) }, "aria-label": "Superset with the exercise above", onClick: toggleSS }, "\u26D3 ss") : null,
+            React.createElement("button", { style: { ...S.uniToggle, ...(restOpen ? S.uniToggleOn : {}) }, "aria-label": "Rest time between sets", onClick: () => setRestOpen((o) => !o) },
+                "\u23F2 ",
+                mmss(restSecs)),
+            React.createElement("button", { style: { ...S.uniToggle, ...(ex.timed ? S.uniToggleOn : {}) }, "aria-label": "Toggle time-based sets", onClick: toggleTimed }, "\u23F1 time"),
+            React.createElement("button", { style: { ...S.uniToggle, ...(uni ? S.uniToggleOn : {}) }, "aria-label": "Toggle per-side tracking", onClick: toggleUni }, "\u21C4 per side")),
+        ex.ssWithPrev && hasPrev ? React.createElement("div", { style: S.ssTag }, "\u26D3 superset with " + prevName + " \u2014 no rest between") : null,
+        rec && (recApplied ? (React.createElement("div", { style: S.recChipDone },
+            "\uD83C\uDFAF Target: ",
+            rec.weight,
+            " ",
+            unit,
+            " \u00B7 ",
+            rec.reps,
+            rec.mode === "reps" ? `\u2013${rec.hi}` : "+",
+            " reps")) : (React.createElement("button", { style: S.recChip, onClick: applyRec },
+            "\uD83C\uDFAF ",
+            rec.mode === "load"
+                ? `Step up \u2192 ${rec.weight} ${unit} \u00B7 ${rec.reps}+ reps`
+                : rec.mode === "hold"
+                    ? `Hold ${rec.weight} ${unit} \u00B7 ${rec.reps}+ reps${rec.why ? ` (${rec.why})` : ""}`
+                    : `${rec.weight} ${unit} \u00B7 beat ${rec.reps} reps`))),
+        restOpen && (React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginTop: 8, marginBottom: 4 } },
+            React.createElement("span", { style: S.plateLabel }, "rest between sets"),
+            React.createElement("button", { style: S.stepBtn, onClick: () => onRestPref(Math.max(15, restSecs - 15)) }, "\u2212"),
+            React.createElement("span", { style: { fontFamily: mono, fontWeight: 700, fontSize: 14, color: C.forge, minWidth: 44, textAlign: "center" } }, mmss(restSecs)),
+            React.createElement("button", { style: S.stepBtn, onClick: () => onRestPref(Math.min(600, restSecs + 15)) }, "+"))),
         React.createElement("div", { style: S.setHeadRow },
             React.createElement("span", { style: { width: 28 } }, uni ? "SIDE" : "SET"),
             React.createElement("span", { style: { flex: 1, textAlign: "center" } },
@@ -1956,7 +1960,7 @@ function overloadFor(data, exId, category, beforeDate, unit) {
     if (earnedStep) {
         if (brutal || lowToday) {
             return { mode: "hold", weight: r1(topW), reps: hi, hi, prevW: topW, prevR: minReps,
-                why: brutal ? "last one was a grinder" : "low readiness today" };
+                why: brutal ? "hard last set" : "low readiness" };
         }
         const inc = Math.max(step, Math.ceil((topW * 0.025) / step) * step);
         return { mode: "load", weight: r1(topW + inc), reps: lo, hi, prevW: topW, prevR: minReps,
@@ -3129,6 +3133,7 @@ const S = {
     card: { background: C.iron2, border: `1px solid ${C.line}`, borderRadius: 14, padding: 14, marginBottom: 14 },
     cardHead: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 },
     cardHeadBtns: { display: "flex", alignItems: "center", gap: 8, flexShrink: 0 },
+    exControls: { display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 },
     uniToggle: { background: C.iron, border: `1px solid ${C.line}`, color: C.faint, borderRadius: 20, padding: "5px 10px", fontFamily: cond, fontSize: 11, letterSpacing: 0.8, textTransform: "uppercase", cursor: "pointer", whiteSpace: "nowrap" },
     uniToggleOn: { background: "rgba(242,162,60,0.16)", borderColor: C.forge, color: C.forge },
     setNumSide: { color: C.forge, fontWeight: 700 },
