@@ -210,7 +210,7 @@ async function writeStore(payload) {
 /* ============================================================ */
 function IronLog() {
     var _a, _b, _c, _d, _e, _f;
-    const [data, setData] = useState({ unit: "kg", workouts: {}, custom: [], restDays: {}, bodyweight: null, bwLog: {}, freezeDays: {}, templates: [], drops: {}, checkins: {}, restPrefs: {}, lastBackup: null, coffeeAsks: {} });
+    const [data, setData] = useState({ unit: "kg", workouts: {}, custom: [], restDays: {}, bodyweight: null, bwLog: {}, freezeDays: {}, templates: [], drops: {}, checkins: {}, restPrefs: {}, lastBackup: null, coffeeAsks: {}, injuries: {} });
     const [loaded, setLoaded] = useState(false);
     const [view, setView] = useState("log"); // log | week | progress | cabinet
     const [pickerOpen, setPickerOpen] = useState(false);
@@ -436,6 +436,14 @@ function IronLog() {
     const [postCheckinOpen, setPostCheckinOpen] = useState(false);
     const [prPop, setPrPop] = useState(null);
     const setRestPref = (exId, secs) => setData((p) => ({ ...p, restPrefs: { ...(p.restPrefs || {}), [exId]: secs } }));
+    const setInjury = (cat, injured, note) => setData((p) => {
+        const inj = { ...(p.injuries || {}) };
+        if (injured)
+            inj[cat] = { note: (note || "").trim() };
+        else
+            delete inj[cat];
+        return { ...p, injuries: inj };
+    });
     // Called the moment a set is ticked done. Detects records against all prior
     // history (the just-ticked set isn't marked done in this snapshot, so it
     // can't beat itself). Weight PRs outrank est-1RM PRs; first-ever sessions
@@ -575,6 +583,7 @@ function IronLog() {
         freezeDays: obj.freezeDays && typeof obj.freezeDays === "object" ? obj.freezeDays : {},
         templates: Array.isArray(obj.templates) ? obj.templates : [],
         drops: obj.drops && typeof obj.drops === "object" ? obj.drops : {},
+        injuries: obj.injuries && typeof obj.injuries === "object" ? obj.injuries : {},
     });
     // recent exercise ids across history, newest first
     const recentIds = (() => {
@@ -604,7 +613,7 @@ function IronLog() {
                 React.createElement(Tab, { active: view === "week", onClick: () => setView("week") }, "Week"),
                 React.createElement(Tab, { active: view === "progress", onClick: () => setView("progress") }, "Progress"),
                 React.createElement(Tab, { active: view === "cabinet", onClick: () => setView("cabinet") }, "Cabinet"))),
-        React.createElement("main", { style: S.main }, !loaded ? (React.createElement("div", { style: S.loading }, "Loading the rack\u2026")) : view === "log" ? (React.createElement(LogView, { dateLabel: headDate(logDate), exercises: logEx, todayExercises: todayEx, unit: unit, data: data, today: today, logDate: logDate, onChangeDate: setLogDate, dayTime: ((_c = data.workouts[logDate]) === null || _c === void 0 ? void 0 : _c.time) || "", onChangeTime: setDayTime, restMarked: restMarked, restKind: restKind, onRest: markRestDay, onUndoRest: clearRestDay, onAdd: () => setPickerOpen(true), onSetDone: handleSetDone, onRestPref: setRestPref, onLogBW: logBW, onLogCheckin: logCheckin, cardio: ((_d = data.workouts[logDate]) === null || _d === void 0 ? void 0 : _d.cardio) || [], onAddCardio: () => setCardioOpen(true), updateCardio: updateCardio, removeCardio: removeCardio, onOpenWorkouts: () => setWorkoutsOpen(true), hasTemplates: (data.templates || []).length > 0, updateEx: updateEx, removeEx: removeEx, startRest: (s) => setRest({ seconds: s, total: s }), onShare: finishSession, freezeAvail: freezeAvail, onFreeze: useFreeze })) : view === "week" ? (React.createElement(WeekView, { data: data, unit: unit, today: today, onShareMonth: (m) => setShareMonth(m) })) : view === "cabinet" ? (React.createElement(CabinetView, { data: data, unit: unit, today: today, onSetBodyweight: setBodyweight, onImport: importData, onBackedUp: () => setData((p) => ({ ...p, lastBackup: Date.now() })) })) : (React.createElement(ProgressView, { data: data, unit: unit, progId: progId, setProgId: setProgId }))),
+        React.createElement("main", { style: S.main }, !loaded ? (React.createElement("div", { style: S.loading }, "Loading the rack\u2026")) : view === "log" ? (React.createElement(LogView, { dateLabel: headDate(logDate), exercises: logEx, todayExercises: todayEx, unit: unit, data: data, today: today, logDate: logDate, onChangeDate: setLogDate, dayTime: ((_c = data.workouts[logDate]) === null || _c === void 0 ? void 0 : _c.time) || "", onChangeTime: setDayTime, restMarked: restMarked, restKind: restKind, onRest: markRestDay, onUndoRest: clearRestDay, onAdd: () => setPickerOpen(true), onSetDone: handleSetDone, onRestPref: setRestPref, onLogBW: logBW, onLogCheckin: logCheckin, cardio: ((_d = data.workouts[logDate]) === null || _d === void 0 ? void 0 : _d.cardio) || [], onAddCardio: () => setCardioOpen(true), updateCardio: updateCardio, removeCardio: removeCardio, onOpenWorkouts: () => setWorkoutsOpen(true), hasTemplates: (data.templates || []).length > 0, updateEx: updateEx, removeEx: removeEx, startRest: (s) => setRest({ seconds: s, total: s }), onShare: finishSession, freezeAvail: freezeAvail, onFreeze: useFreeze })) : view === "week" ? (React.createElement(WeekView, { data: data, unit: unit, today: today, onShareMonth: (m) => setShareMonth(m) })) : view === "cabinet" ? (React.createElement(CabinetView, { data: data, unit: unit, today: today, onSetBodyweight: setBodyweight, onImport: importData, onBackedUp: () => setData((p) => ({ ...p, lastBackup: Date.now() })) })) : (React.createElement(ProgressView, { data: data, unit: unit, progId: progId, setProgId: setProgId, onSetInjury: setInjury }))),
         coffeeAsk && (React.createElement(CoffeeAsk, { ask: coffeeAsk, onPick: (action) => { if (action === "never") markCoffeeAsk("never"); else markCoffeeAsk(coffeeAsk.key); setCoffeeAsk(null); } })),
         prPop && (React.createElement(PRPop, { pop: prPop, unit: unit, onClose: () => setPrPop(null) })),
         postCheckinOpen && (React.createElement(PostCheckin, { existing: (_e = (data.checkins || {})[logDate]) === null || _e === void 0 ? void 0 : _e.post, onDone: afterPostCheckin, onCancel: () => setPostCheckinOpen(false) })),
@@ -627,7 +636,7 @@ function IronLog() {
                         React.createElement("span", { style: S.pickCat }, "add")))))))),
         hiitOpen && (React.createElement(HIITTimer, { onClose: () => setHiitOpen(false), onLog: (cfg, roundsDone, totalSec) => { logHIIT(cfg, roundsDone, totalSec); setHiitOpen(false); } })),
         workoutsOpen && (React.createElement(WorkoutsModal, { templates: data.templates || [], lib: lib, todayExercises: ((_f = data.workouts[logDate]) === null || _f === void 0 ? void 0 : _f.exercises) || [], onStart: startWorkout, onSave: saveTemplate, onDelete: deleteTemplate, onClose: () => setWorkoutsOpen(false) })),
-        pickerOpen && (React.createElement(Picker, { lib: lib, recentIds: recentIds, onPick: addExercise, onCreate: addCustom, onUpdate: updateCustom, onDelete: deleteCustom, onClose: () => setPickerOpen(false) })),
+        pickerOpen && (React.createElement(Picker, { lib: lib, recentIds: recentIds, injuries: data.injuries || {}, onPick: addExercise, onCreate: addCustom, onUpdate: updateCustom, onDelete: deleteCustom, onClose: () => setPickerOpen(false) })),
         rest && (React.createElement(RestTimer, { state: rest, onTick: (s) => setRest((r) => (r ? { ...r, seconds: s } : r)), onSet: (s) => setRest({ seconds: s, total: s }), onClose: () => setRest(null) })),
         shareMonth && (React.createElement(MonthlyReport, { data: data, unit: unit, yearMonth: shareMonth, onClose: () => setShareMonth(null) })),
         shareDay && (React.createElement(SessionShare, { data: data, unit: unit, dateIso: shareDay, saveState: saveState, lastSaved: lastSaved, storagePresent: storagePresent, onRetry: flushSave, onClose: () => { setShareDay(null); if (pendingCoffee) { setCoffeeAsk(pendingCoffee); setPendingCoffee(null); } } }))));
@@ -679,7 +688,7 @@ function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logD
         emptyDay ? (React.createElement("div", { style: S.empty },
             React.createElement("div", { style: S.emptyMark }, "\u25F7"),
             React.createElement("div", { style: S.emptyTitle }, "Nothing logged yet"),
-            React.createElement("div", { style: S.emptySub }, (() => { const rr = recoveryRows(data, today).filter((r) => r.fresh >= 80).sort((a, b) => b.fresh - a.fresh).slice(0, 3).map((r) => r.cat); return rr.length ? "Freshest today: " + rr.join(" \u00B7 ") + " \u2014 good place to start." : "Load the bar \u2014 add your first lift below."; })()))) : (exercises.map((ex, exI) => (React.createElement(ExerciseCard, { key: ex.uid, ex: ex, unit: unit, hasPrev: exI > 0, prevName: exI > 0 ? exercises[exI - 1].name : null, rec: ex.timed ? null : overloadFor(data, ex.id, ex.category, logDate, unit), restSecs: restFor(data, ex), onDone: (set) => onSetDone(ex, set, restFor(data, ex)), onRestPref: (secs) => onRestPref(ex.id, secs), update: (fn) => updateEx(ex.uid, fn), remove: () => removeEx(ex.uid) })))),
+            React.createElement("div", { style: S.emptySub }, (() => { const rr = recoveryRows(data, today).filter((r) => r.fresh >= 80 && !r.injured).sort((a, b) => b.fresh - a.fresh).slice(0, 3).map((r) => r.cat); return rr.length ? "Freshest today: " + rr.join(" \u00B7 ") + " \u2014 good place to start." : "Load the bar \u2014 add your first lift below."; })()))) : (exercises.map((ex, exI) => (React.createElement(ExerciseCard, { key: ex.uid, ex: ex, unit: unit, hasPrev: exI > 0, prevName: exI > 0 ? exercises[exI - 1].name : null, rec: ex.timed ? null : overloadFor(data, ex.id, ex.category, logDate, unit), restSecs: restFor(data, ex), injured: !!(data.injuries || {})[ex.category], injuryNote: (((data.injuries || {})[ex.category]) || {}).note || "", onDone: (set) => onSetDone(ex, set, restFor(data, ex)), onRestPref: (secs) => onRestPref(ex.id, secs), update: (fn) => updateEx(ex.uid, fn), remove: () => removeEx(ex.uid) })))),
         cardioList.map((c) => (React.createElement(CardioCard, { key: c.uid, c: c, unit: unit, last: cardioLastFor(data, c.id, logDate, unit), update: (fn) => updateCardio(c.uid, fn), remove: () => removeCardio(c.uid) }))),
         React.createElement("div", { style: { display: "flex", gap: 8 } },
             React.createElement("button", { style: { ...S.addBtn, flex: 1 }, onClick: onAdd },
@@ -969,31 +978,53 @@ function recoveryRows(data, today) {
             fatigue += sets * Math.max(0, 1 - (k * 24) / horizon);
         }
         const fresh = Math.max(0, Math.min(100, Math.round(100 - fatigue * 6)));
-        return { cat, fresh };
-    }).filter((r) => Object.values(data.workouts).some((day) => day.exercises.some((e) => e.category === r.cat && e.sets.some(isWorkDone)) ||
+        const inj = (data.injuries || {})[cat];
+        return { cat, fresh, injured: !!inj, note: (inj && inj.note) || "" };
+    }).filter((r) => r.injured || Object.values(data.workouts).some((day) => day.exercises.some((e) => e.category === r.cat && e.sets.some(isWorkDone)) ||
         (r.cat === "HIIT" && (day.cardio || []).some((c) => c.hiit))));
 }
-function RecoveryHeatmap({ data, today }) {
-    const rows = recoveryRows(data, today).sort((a, b) => b.fresh - a.fresh);
-    if (!rows.length)
-        return null;
+function RecoveryHeatmap({ data, today, onSetInjury }) {
+    const [manage, setManage] = useState(false);
+    const rows = recoveryRows(data, today).sort((a, b) => (a.injured ? 1 : 0) - (b.injured ? 1 : 0) || b.fresh - a.fresh);
+    const injuries = data.injuries || {};
+    const anyRows = rows.length > 0;
     const color = (f) => (f >= 80 ? C.green : f >= 40 ? C.forge : "#D65A45");
     const band = (f) => (f >= 80 ? "fresh" : f >= 40 ? "recovering" : "loaded");
-    const best = rows.filter((r) => r.fresh >= 80).map((r) => r.cat);
+    const best = rows.filter((r) => r.fresh >= 80 && !r.injured).map((r) => r.cat);
     return (React.createElement(React.Fragment, null,
-        React.createElement("div", { style: S.eyebrow }, "Muscle recovery"),
+        React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between" } },
+            React.createElement("div", { style: S.eyebrow }, "Muscle recovery"),
+            React.createElement("button", { style: S.injManageBtn, onClick: () => setManage(true) }, "\u2695 Manage injuries")),
         best.length > 0 && React.createElement("div", { style: S.hmBest },
             "Today's best bets: ",
-            best.join(" · ")),
-        React.createElement("div", { style: S.hmGrid }, rows.map((r) => (React.createElement("div", { key: r.cat, style: S.hmTile },
+            best.join(" \u00B7 ")),
+        anyRows && React.createElement("div", { style: S.hmGrid }, rows.map((r) => (React.createElement("div", { key: r.cat, style: { ...S.hmTile, ...(r.injured ? { borderColor: "#D65A45" } : {}) } },
             React.createElement("div", { style: S.hmCat }, r.cat),
-            React.createElement("div", { style: { ...S.hmPct, color: color(r.fresh) } },
-                r.fresh,
-                "%"),
+            r.injured
+                ? React.createElement("div", { style: { ...S.hmPct, color: "#D65A45" } }, "\u26A0")
+                : React.createElement("div", { style: { ...S.hmPct, color: color(r.fresh) } },
+                    r.fresh,
+                    "%"),
             React.createElement("div", { style: S.hmBar },
-                React.createElement("div", { style: { ...S.hmBarFill, width: r.fresh + "%", background: color(r.fresh) } })),
-            React.createElement("div", { style: { ...S.hmBand, color: color(r.fresh) } }, band(r.fresh)))))),
-        React.createElement("div", { style: S.hmNote }, "Estimated from your last 7 days of working volume. Recovery horizons: legs & back 72h, chest & shoulders 60h, arms 48h, core 36h.")));
+                React.createElement("div", { style: { ...S.hmBarFill, width: (r.injured ? 100 : r.fresh) + "%", background: r.injured ? "#D65A45" : color(r.fresh) } })),
+            React.createElement("div", { style: { ...S.hmBand, color: r.injured ? "#D65A45" : color(r.fresh) } }, r.injured ? "injured \u2014 rest it" : band(r.fresh)))))),
+        anyRows && React.createElement("div", { style: S.hmNote }, "Estimated from your last 7 days of working volume. Injured muscles are flagged in red and left out of today's best bets."),
+        manage && React.createElement("div", { style: S.sheetBackdrop, onClick: () => setManage(false) },
+            React.createElement("div", { style: S.sheet, onClick: (e) => e.stopPropagation() },
+                React.createElement("div", { style: S.sheetGrip }),
+                React.createElement("div", { style: S.sheetHead },
+                    React.createElement("span", { style: S.sheetTitle }, "\u2695 Injuries"),
+                    React.createElement("button", { style: S.iconBtn, onClick: () => setManage(false) }, "\u2715")),
+                React.createElement("div", { style: { ...S.hmNote, padding: "0 16px", marginBottom: 12 } }, "Flag a body part you're nursing. It won't be suggested as fresh, and any exercise from it warns you before and during your session."),
+                React.createElement("div", { style: S.sheetScroll }, CATS.map((cat) => {
+                    const inj = injuries[cat];
+                    const on = !!inj;
+                    return React.createElement("div", { key: cat, style: { marginBottom: 8 } },
+                        React.createElement("button", { style: { ...S.uniRow, marginTop: 0, ...(on ? S.injRowOn : {}) }, onClick: () => onSetInjury(cat, !on, on ? "" : (inj && inj.note) || "") },
+                            React.createElement("span", { style: { ...S.uniBox, ...(on ? { borderColor: "#D65A45", color: "#D65A45" } : {}) } }, on ? "\u26A0" : ""),
+                            React.createElement("span", null, cat)),
+                        on && React.createElement("input", { style: { ...S.search, marginTop: 6 }, placeholder: "Note \u2014 e.g. left knee, go light (optional)", defaultValue: (inj && inj.note) || "", onBlur: (e) => onSetInjury(cat, true, e.target.value) }));
+                }))))));
 }
 
 function DailyStrip({ data, unit, logDate, onLogBW, onLogCheckin }) {
@@ -1114,7 +1145,7 @@ function CardioCard({ c, unit, last, update, remove }) {
                     React.createElement("input", { style: S.readout, inputMode: "numeric", value: c.level ? c.level : "", placeholder: "\u2013", onChange: (e) => setLvl(parseInt(e.target.value) || 0) }),
                     React.createElement("button", { style: S.stepBtn, onClick: () => setLvl((c.level || 0) + 1) }, "+")))))));
 }
-function ExerciseCard({ ex, unit, rec, restSecs, hasPrev, prevName, onDone, onRestPref, update, remove }) {
+function ExerciseCard({ ex, unit, rec, restSecs, hasPrev, prevName, injured, injuryNote, onDone, onRestPref, update, remove }) {
     const [active, setActive] = useState(ex.sets.length - 1);
     const [recApplied, setRecApplied] = useState(false);
     const [restOpen, setRestOpen] = useState(false);
@@ -1183,6 +1214,7 @@ function ExerciseCard({ ex, unit, rec, restSecs, hasPrev, prevName, onDone, onRe
                     ex.category,
                     ex.fromLast && React.createElement("span", { style: S.lastTag }, "\u00B7 prefilled from last time"))),
             React.createElement("button", { style: S.iconBtn, "aria-label": "Remove exercise", onClick: remove }, "\u2715")),
+        injured ? React.createElement("div", { style: S.injTag }, "\u26A0 " + ex.category + " is flagged as injured" + (injuryNote ? " \u2014 " + injuryNote : "") + " \u00B7 train with caution") : null,
         React.createElement("div", { style: S.exControls },
             hasPrev ? React.createElement("button", { style: { ...S.uniToggle, ...(ex.ssWithPrev ? S.uniToggleOn : {}) }, "aria-label": "Superset with the exercise above", onClick: toggleSS }, "\u26D3 ss") : null,
             React.createElement("button", { style: { ...S.uniToggle, ...(restOpen ? S.uniToggleOn : {}) }, "aria-label": "Rest time between sets", onClick: () => setRestOpen((o) => !o) },
@@ -1479,7 +1511,7 @@ function WorkoutsModal({ templates, lib, todayExercises, onStart, onSave, onDele
                         } } }, editId ? "Save changes" : "Save workout")))))));
 }
 /* ---------------- Progress view ---------------- */
-function ProgressView({ data, unit, progId, setProgId }) {
+function ProgressView({ data, unit, progId, setProgId, onSetInjury }) {
     // exercises that have any history
     const logged = (() => {
         const ids = [];
@@ -1516,7 +1548,7 @@ function ProgressView({ data, unit, progId, setProgId }) {
     const pr = points.length ? Math.max(...points.map((p) => p.value)) : 0;
     const latest = points.length ? points[points.length - 1].value : 0;
     return (React.createElement("div", null,
-        React.createElement(RecoveryHeatmap, { data: data, today: localISO(new Date()) }),
+        React.createElement(RecoveryHeatmap, { data: data, today: localISO(new Date()), onSetInjury: onSetInjury }),
         React.createElement("div", { style: S.eyebrow }, "Estimated 1-rep max"),
         React.createElement("select", { style: S.select, value: current, onChange: (e) => setProgId(e.target.value) }, logged.map((l) => (React.createElement("option", { key: l.id, value: l.id }, l.name)))),
         points.length === 0 ? (React.createElement("div", { style: S.empty },
@@ -1592,7 +1624,8 @@ function Chart({ points, unit, pr }) {
             points.length > 1 && React.createElement("span", null, shortDate(points[points.length - 1].date)))));
 }
 /* ---------------- Exercise picker ---------------- */
-function Picker({ lib, recentIds, onPick, onCreate, onUpdate, onDelete, onClose }) {
+function Picker({ lib, recentIds, injuries, onPick, onCreate, onUpdate, onDelete, onClose }) {
+    const inj = injuries || {};
     const [q, setQ] = useState("");
     const [editing, setEditing] = useState(null); // { id: null|string, name, category } | null
     const inputRef = useRef(null);
@@ -1620,16 +1653,16 @@ function Picker({ lib, recentIds, onPick, onCreate, onUpdate, onDelete, onClose 
                 }, onDelete: () => { onDelete(editing.id); setEditing(null); } })) : (React.createElement(React.Fragment, null,
                 React.createElement("input", { ref: inputRef, style: S.search, placeholder: "Search exercises\u2026", value: q, onChange: (e) => setQ(e.target.value) }),
                 React.createElement("div", { style: S.sheetScroll }, filtered ? (React.createElement(React.Fragment, null,
-                    filtered.map((e) => React.createElement(PickRow, { key: e.id, e: e, onPick: onPick, onEdit: startEdit, showCat: true })),
+                    filtered.map((e) => React.createElement(PickRow, { key: e.id, e: e, onPick: onPick, onEdit: startEdit, showCat: true, injured: !!inj[e.category] })),
                     React.createElement("button", { style: S.createRow, onClick: startCreate },
                         React.createElement("span", { style: S.pickPlus }, "+"),
                         React.createElement("span", null, q.trim() ? `Create “${q.trim()}”` : "Create custom exercise")))) : (React.createElement(React.Fragment, null,
                     recent.length > 0 && (React.createElement("section", null,
                         React.createElement("div", { style: S.catLabel }, "Recent"),
-                        recent.map((e) => React.createElement(PickRow, { key: "r" + e.id, e: e, onPick: onPick, onEdit: startEdit, showCat: true })))),
+                        recent.map((e) => React.createElement(PickRow, { key: "r" + e.id, e: e, onPick: onPick, onEdit: startEdit, showCat: true, injured: !!inj[e.category] })))),
                     CATS.map((cat) => (React.createElement("section", { key: cat },
-                        React.createElement("div", { style: S.catLabel }, cat),
-                        lib.filter((e) => e.category === cat).map((e) => (React.createElement(PickRow, { key: e.id, e: e, onPick: onPick, onEdit: startEdit })))))),
+                        React.createElement("div", { style: S.catLabel }, cat, inj[cat] ? React.createElement("span", { style: S.pickInjTag }, "\u26A0 injured") : null),
+                        lib.filter((e) => e.category === cat).map((e) => (React.createElement(PickRow, { key: e.id, e: e, onPick: onPick, onEdit: startEdit, injured: !!inj[cat] })))))),
                     React.createElement("button", { style: S.createRow, onClick: startCreate },
                         React.createElement("span", { style: S.pickPlus }, "+"),
                         React.createElement("span", null, "Create custom exercise"))))))))));
@@ -1655,13 +1688,14 @@ function CreatePanel({ initial, isEdit, onCancel, onSave, onDelete }) {
             React.createElement("button", { style: { ...S.createSave, ...(valid ? {} : S.createSaveOff) }, disabled: !valid, onClick: () => valid && onSave(name, cat, uni) }, isEdit ? "Save changes" : "Add to session")),
         isEdit ? (React.createElement("button", { style: { ...S.deleteBtn, ...(confirm ? S.deleteBtnArmed : {}) }, onClick: () => (confirm ? onDelete() : setConfirm(true)) }, confirm ? "Tap again to delete" : "Delete exercise")) : (React.createElement("div", { style: S.createNote }, "Saved to your library for next time."))));
 }
-function PickRow({ e, onPick, showCat, onEdit }) {
+function PickRow({ e, onPick, showCat, onEdit, injured }) {
     const custom = e.id.startsWith("c_");
     return (React.createElement("div", { style: S.pickRowWrap },
         React.createElement("button", { style: S.pickRow, onClick: () => onPick(e) },
             React.createElement("span", { style: S.pickName },
                 e.name,
-                custom && React.createElement("span", { style: S.customTag }, "custom")),
+                custom && React.createElement("span", { style: S.customTag }, "custom"),
+                injured && React.createElement("span", { style: S.pickInjTag }, "\u26A0")),
             showCat && React.createElement("span", { style: S.pickCat }, e.category),
             React.createElement("span", { style: S.pickPlus }, "+")),
         custom && onEdit && (React.createElement("button", { style: S.editBtn, "aria-label": `Edit ${e.name}`, onClick: (ev) => { ev.stopPropagation(); onEdit(e); } }, "\u270E"))));
@@ -3432,6 +3466,10 @@ Object.assign(S, {
     uniRow: { display: "flex", alignItems: "center", gap: 10, width: "100%", marginTop: 16, background: C.iron, border: `1px solid ${C.line}`, borderRadius: 11, padding: "13px 14px", cursor: "pointer", color: C.dim, fontFamily: body, fontSize: 14, textAlign: "left" },
     uniRowOn: { background: "rgba(242,162,60,0.10)", borderColor: C.forge, color: C.chalk },
     uniBox: { width: 22, height: 22, flexShrink: 0, borderRadius: 6, border: `1px solid ${C.faint}`, display: "flex", alignItems: "center", justifyContent: "center", color: C.forge, fontWeight: 700, fontSize: 14 },
+    injTag: { display: "block", marginBottom: 10, background: "rgba(214,90,69,0.12)", border: "1px solid #D65A45", color: "#E8846F", borderRadius: 10, padding: "7px 11px", fontFamily: cond, fontWeight: 700, fontSize: 12, letterSpacing: 0.3 },
+    injManageBtn: { background: "none", border: "none", color: C.faint, fontFamily: cond, fontWeight: 700, fontSize: 12, letterSpacing: 0.5, cursor: "pointer", padding: "0 0 8px" },
+    injRowOn: { background: "rgba(214,90,69,0.10)", borderColor: "#D65A45", color: C.chalk },
+    pickInjTag: { color: "#D65A45", marginLeft: 6, fontSize: 11, fontFamily: cond, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase" },
     createActions: { display: "flex", gap: 8, marginTop: 22 },
     createCancel: { flex: 1, background: C.iron, border: `1px solid ${C.line}`, color: C.chalk, borderRadius: 12, padding: "14px", fontFamily: cond, fontWeight: 600, fontSize: 15, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" },
     createSave: { flex: 2, background: C.forge, color: "#1a1206", border: "none", borderRadius: 12, padding: "14px", fontFamily: cond, fontWeight: 700, fontSize: 15, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" },
