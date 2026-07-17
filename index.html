@@ -48,6 +48,9 @@ const C = {
     green: "#3FA86A",
 };
 const STEP = { kg: 2.5, lb: 5 };
+// The guide PDF lives next to index.html in the repo. Relative path so it keeps
+// working if the app ever moves to a custom domain.
+const GUIDE_URL = "./ironlog-guide.pdf";
 const KG2LB = 2.20462;
 const r1 = (n) => Math.round(n * 10) / 10;
 const fmt = (n) => {
@@ -210,11 +213,12 @@ async function writeStore(payload) {
 /* ============================================================ */
 function IronLog() {
     var _a, _b, _c, _d, _e, _f;
-    const [data, setData] = useState({ unit: "kg", workouts: {}, custom: [], restDays: {}, bodyweight: null, bwLog: {}, freezeDays: {}, templates: [], drops: {}, checkins: {}, restPrefs: {}, lastBackup: null, coffeeAsks: {}, injuries: {} });
+    const [data, setData] = useState({ unit: "kg", workouts: {}, custom: [], restDays: {}, bodyweight: null, bwLog: {}, freezeDays: {}, templates: [], drops: {}, checkins: {}, restPrefs: {}, lastBackup: null, coffeeAsks: {}, injuries: {}, guideSeen: false });
     const [loaded, setLoaded] = useState(false);
     const [view, setView] = useState("log"); // log | week | progress | cabinet
     const [pickerOpen, setPickerOpen] = useState(false);
     const [workoutsOpen, setWorkoutsOpen] = useState(false);
+    const [suggestOpen, setSuggestOpen] = useState(false);
     const [dropReveal, setDropReveal] = useState(null); // relic id just dropped
     const [rest, setRest] = useState(null); // { seconds, total }
     const [progId, setProgId] = useState(null);
@@ -368,6 +372,20 @@ function IronLog() {
         });
         setWorkoutsOpen(false);
     };
+    // Adds a suggested session in one go, each lift prefilling from last time.
+    const startSuggested = (items) => {
+        mutateDay((day) => {
+            items.forEach((item) => {
+                const uniFlag = !!item.uni;
+                const prefill = lastSetsFor(item.id);
+                const sets = prefill || [{ weight: 0, reps: 0, unit, done: false, warmup: false, side: uniFlag ? "B" : null }];
+                day.exercises = [
+                    ...day.exercises,
+                    { uid: uid(), id: item.id, name: item.name, category: item.category, unilateral: uniFlag, sets, fromLast: !!prefill },
+                ];
+            });
+        });
+    };
     // ---- Cardio ----
     const [cardioOpen, setCardioOpen] = useState(false);
     const addCardio = (c) => {
@@ -444,6 +462,12 @@ function IronLog() {
             delete inj[cat];
         return { ...p, injuries: inj };
     });
+    const markGuideSeen = () => setData((p) => (p.guideSeen ? p : { ...p, guideSeen: true }));
+    const openGuide = () => { try {
+        window.open(GUIDE_URL, "_blank", "noopener");
+    }
+    catch (e) { }
+    markGuideSeen(); };
     // Called the moment a set is ticked done. Detects records against all prior
     // history (the just-ticked set isn't marked done in this snapshot, so it
     // can't beat itself). Weight PRs outrank est-1RM PRs; first-ever sessions
@@ -584,6 +608,7 @@ function IronLog() {
         templates: Array.isArray(obj.templates) ? obj.templates : [],
         drops: obj.drops && typeof obj.drops === "object" ? obj.drops : {},
         injuries: obj.injuries && typeof obj.injuries === "object" ? obj.injuries : {},
+        guideSeen: !!obj.guideSeen,
     });
     // recent exercise ids across history, newest first
     const recentIds = (() => {
@@ -606,6 +631,7 @@ function IronLog() {
                     React.createElement("span", { style: { color: C.forge } }, "LOG"),
                     React.createElement("span", { style: S.forgeDot })),
                 React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } },
+                    React.createElement("button", { style: S.guideBtn, "aria-label": "New here? Open the guide", onClick: openGuide }, "\uD83D\uDCD6"),
                     React.createElement(SaveBadge, { state: saveState, lastSaved: lastSaved, storagePresent: storagePresent }),
                     React.createElement(UnitToggle, { unit: unit, onChange: setUnit }))),
             React.createElement("nav", { style: S.nav },
@@ -613,7 +639,8 @@ function IronLog() {
                 React.createElement(Tab, { active: view === "week", onClick: () => setView("week") }, "Week"),
                 React.createElement(Tab, { active: view === "progress", onClick: () => setView("progress") }, "Progress"),
                 React.createElement(Tab, { active: view === "cabinet", onClick: () => setView("cabinet") }, "Cabinet"))),
-        React.createElement("main", { style: S.main }, !loaded ? (React.createElement("div", { style: S.loading }, "Loading the rack\u2026")) : view === "log" ? (React.createElement(LogView, { dateLabel: headDate(logDate), exercises: logEx, todayExercises: todayEx, unit: unit, data: data, today: today, logDate: logDate, onChangeDate: setLogDate, dayTime: ((_c = data.workouts[logDate]) === null || _c === void 0 ? void 0 : _c.time) || "", onChangeTime: setDayTime, restMarked: restMarked, restKind: restKind, onRest: markRestDay, onUndoRest: clearRestDay, onAdd: () => setPickerOpen(true), onSetDone: handleSetDone, onRestPref: setRestPref, onLogBW: logBW, onLogCheckin: logCheckin, cardio: ((_d = data.workouts[logDate]) === null || _d === void 0 ? void 0 : _d.cardio) || [], onAddCardio: () => setCardioOpen(true), updateCardio: updateCardio, removeCardio: removeCardio, onOpenWorkouts: () => setWorkoutsOpen(true), hasTemplates: (data.templates || []).length > 0, updateEx: updateEx, removeEx: removeEx, startRest: (s) => setRest({ seconds: s, total: s }), onShare: finishSession, freezeAvail: freezeAvail, onFreeze: useFreeze })) : view === "week" ? (React.createElement(WeekView, { data: data, unit: unit, today: today, onShareMonth: (m) => setShareMonth(m) })) : view === "cabinet" ? (React.createElement(CabinetView, { data: data, unit: unit, today: today, onSetBodyweight: setBodyweight, onImport: importData, onBackedUp: () => setData((p) => ({ ...p, lastBackup: Date.now() })) })) : (React.createElement(ProgressView, { data: data, unit: unit, progId: progId, setProgId: setProgId, onSetInjury: setInjury }))),
+        React.createElement("main", { style: S.main }, !loaded ? (React.createElement("div", { style: S.loading }, "Loading the rack\u2026")) : view === "log" ? (React.createElement(LogView, { dateLabel: headDate(logDate), exercises: logEx, todayExercises: todayEx, unit: unit, data: data, today: today, logDate: logDate, onChangeDate: setLogDate, dayTime: ((_c = data.workouts[logDate]) === null || _c === void 0 ? void 0 : _c.time) || "", onChangeTime: setDayTime, restMarked: restMarked, restKind: restKind, onRest: markRestDay, onUndoRest: clearRestDay, onAdd: () => setPickerOpen(true), onSetDone: handleSetDone, onRestPref: setRestPref, onLogBW: logBW, onLogCheckin: logCheckin, cardio: ((_d = data.workouts[logDate]) === null || _d === void 0 ? void 0 : _d.cardio) || [], onAddCardio: () => setCardioOpen(true), updateCardio: updateCardio, removeCardio: removeCardio, onOpenWorkouts: () => setWorkoutsOpen(true), onSuggest: () => setSuggestOpen(true), hasTemplates: (data.templates || []).length > 0, updateEx: updateEx, removeEx: removeEx, startRest: (s) => setRest({ seconds: s, total: s }), onShare: finishSession, freezeAvail: freezeAvail, onFreeze: useFreeze })) : view === "week" ? (React.createElement(WeekView, { data: data, unit: unit, today: today, onShareMonth: (m) => setShareMonth(m) })) : view === "cabinet" ? (React.createElement(CabinetView, { data: data, unit: unit, today: today, onSetBodyweight: setBodyweight, onImport: importData, onBackedUp: () => setData((p) => ({ ...p, lastBackup: Date.now() })) })) : (React.createElement(ProgressView, { data: data, unit: unit, progId: progId, setProgId: setProgId, onSetInjury: setInjury }))),
+        loaded && view === "log" && !data.guideSeen && (React.createElement(GuidePrompt, { onOpen: openGuide, onDismiss: markGuideSeen })),
         coffeeAsk && (React.createElement(CoffeeAsk, { ask: coffeeAsk, onPick: (action) => { if (action === "never") markCoffeeAsk("never"); else markCoffeeAsk(coffeeAsk.key); setCoffeeAsk(null); } })),
         prPop && (React.createElement(PRPop, { pop: prPop, unit: unit, onClose: () => setPrPop(null) })),
         postCheckinOpen && (React.createElement(PostCheckin, { existing: (_e = (data.checkins || {})[logDate]) === null || _e === void 0 ? void 0 : _e.post, onDone: afterPostCheckin, onCancel: () => setPostCheckinOpen(false) })),
@@ -636,13 +663,14 @@ function IronLog() {
                         React.createElement("span", { style: S.pickCat }, "add")))))))),
         hiitOpen && (React.createElement(HIITTimer, { onClose: () => setHiitOpen(false), onLog: (cfg, roundsDone, totalSec) => { logHIIT(cfg, roundsDone, totalSec); setHiitOpen(false); } })),
         workoutsOpen && (React.createElement(WorkoutsModal, { templates: data.templates || [], lib: lib, todayExercises: ((_f = data.workouts[logDate]) === null || _f === void 0 ? void 0 : _f.exercises) || [], onStart: startWorkout, onSave: saveTemplate, onDelete: deleteTemplate, onClose: () => setWorkoutsOpen(false) })),
+        suggestOpen && (React.createElement(SuggestSheet, { suggestion: suggestSession(data, lib, today), unit: unit, onStart: startSuggested, onClose: () => setSuggestOpen(false) })),
         pickerOpen && (React.createElement(Picker, { lib: lib, recentIds: recentIds, injuries: data.injuries || {}, onPick: addExercise, onCreate: addCustom, onUpdate: updateCustom, onDelete: deleteCustom, onClose: () => setPickerOpen(false) })),
         rest && (React.createElement(RestTimer, { state: rest, onTick: (s) => setRest((r) => (r ? { ...r, seconds: s } : r)), onSet: (s) => setRest({ seconds: s, total: s }), onClose: () => setRest(null) })),
         shareMonth && (React.createElement(MonthlyReport, { data: data, unit: unit, yearMonth: shareMonth, onClose: () => setShareMonth(null) })),
         shareDay && (React.createElement(SessionShare, { data: data, unit: unit, dateIso: shareDay, saveState: saveState, lastSaved: lastSaved, storagePresent: storagePresent, onRetry: flushSave, onClose: () => { setShareDay(null); if (pendingCoffee) { setCoffeeAsk(pendingCoffee); setPendingCoffee(null); } } }))));
 }
 /* ---------------- Log view ---------------- */
-function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logDate, onChangeDate, dayTime, onChangeTime, restMarked, restKind, onRest, onUndoRest, onAdd, onSetDone, onRestPref, onLogBW, onLogCheckin, cardio, onAddCardio, updateCardio, removeCardio, onOpenWorkouts, hasTemplates, updateEx, removeEx, startRest, onShare, freezeAvail, onFreeze }) {
+function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logDate, onChangeDate, dayTime, onChangeTime, restMarked, restKind, onRest, onUndoRest, onAdd, onSetDone, onRestPref, onLogBW, onLogCheckin, cardio, onAddCardio, updateCardio, removeCardio, onOpenWorkouts, onSuggest, hasTemplates, updateEx, removeEx, startRest, onShare, freezeAvail, onFreeze }) {
     const isWork = (s) => s.done && !s.warmup;
     const isBackdate = logDate !== today;
     const timeLabel = dayTime ? fmtTime(dayTime) : (isBackdate ? "Add session time" : "Set time");
@@ -688,7 +716,7 @@ function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logD
         emptyDay ? (React.createElement("div", { style: S.empty },
             React.createElement("div", { style: S.emptyMark }, "\u25F7"),
             React.createElement("div", { style: S.emptyTitle }, "Nothing logged yet"),
-            React.createElement("div", { style: S.emptySub }, (() => { const rr = recoveryRows(data, today).filter((r) => r.fresh >= 80 && !r.injured).sort((a, b) => b.fresh - a.fresh).slice(0, 3).map((r) => r.cat); return rr.length ? "Freshest today: " + rr.join(" \u00B7 ") + " \u2014 good place to start." : "Load the bar \u2014 add your first lift below."; })()))) : (exercises.map((ex, exI) => (React.createElement(ExerciseCard, { key: ex.uid, ex: ex, unit: unit, hasPrev: exI > 0, prevName: exI > 0 ? exercises[exI - 1].name : null, rec: ex.timed ? null : overloadFor(data, ex.id, ex.category, logDate, unit), restSecs: restFor(data, ex), injured: !!(data.injuries || {})[ex.category], injuryNote: (((data.injuries || {})[ex.category]) || {}).note || "", onDone: (set) => onSetDone(ex, set, restFor(data, ex)), onRestPref: (secs) => onRestPref(ex.id, secs), update: (fn) => updateEx(ex.uid, fn), remove: () => removeEx(ex.uid) })))),
+            React.createElement("div", { style: S.emptySub }, (() => { const rr = recoveryRows(data, today).filter((r) => r.fresh >= 80 && !r.injured).sort((a, b) => b.fresh - a.fresh).slice(0, 3).map((r) => r.cat); return rr.length ? "Freshest today: " + rr.join(" \u00B7 ") + " \u2014 good place to start." : "Load the bar \u2014 add your first lift below."; })()), !isBackdate && React.createElement("button", { style: S.suggestBtn, onClick: onSuggest }, "\u26A1 Suggest today\u2019s session"))) : (exercises.map((ex, exI) => (React.createElement(ExerciseCard, { key: ex.uid, ex: ex, unit: unit, hasPrev: exI > 0, prevName: exI > 0 ? exercises[exI - 1].name : null, rec: ex.timed ? null : overloadFor(data, ex.id, ex.category, logDate, unit), restSecs: restFor(data, ex), injured: !!(data.injuries || {})[ex.category], injuryNote: (((data.injuries || {})[ex.category]) || {}).note || "", onDone: (set) => onSetDone(ex, set, restFor(data, ex)), onRestPref: (secs) => onRestPref(ex.id, secs), update: (fn) => updateEx(ex.uid, fn), remove: () => removeEx(ex.uid) })))),
         cardioList.map((c) => (React.createElement(CardioCard, { key: c.uid, c: c, unit: unit, last: cardioLastFor(data, c.id, logDate, unit), update: (fn) => updateCardio(c.uid, fn), remove: () => removeCardio(c.uid) }))),
         React.createElement("div", { style: { display: "flex", gap: 8 } },
             React.createElement("button", { style: { ...S.addBtn, flex: 1 }, onClick: onAdd },
@@ -836,6 +864,15 @@ function HIITTimer({ onClose, onLog }) {
             React.createElement("button", { style: S.hiitCtl, onClick: endEarly }, "End \u2715"))));
 }
 /* ---------------- PR celebration ---------------- */
+function GuidePrompt({ onOpen, onDismiss }) {
+    return (React.createElement("div", { style: S.sheetBackdrop },
+        React.createElement("div", { style: { ...S.dropCard, textAlign: "center" }, onClick: (e) => e.stopPropagation() },
+            React.createElement("div", { style: S.dropEyebrow }, "\uD83D\uDCD6 New to the forge?"),
+            React.createElement("div", { style: { ...S.dropName, marginTop: 14 } }, "Welcome to IRONLOG"),
+            React.createElement("div", { style: S.dropLore }, "A quick, picture-led guide walks you through logging, hitting your targets, and tracking recovery \u2014 about two minutes, so nothing feels like a mystery."),
+            React.createElement("button", { style: S.dropBtn, onClick: onOpen }, "\uD83D\uDCD6 Open the guide"),
+            React.createElement("button", { style: { ...S.hiitCtlDark, width: "100%", marginTop: 10 }, onClick: onDismiss }, "I\u2019ll explore on my own"))));
+}
 function CoffeeAsk({ ask, onPick }) {
     return (React.createElement("div", { style: S.sheetBackdrop },
         React.createElement("div", { style: { ...S.dropCard, textAlign: "center" }, onClick: (e) => e.stopPropagation() },
@@ -870,6 +907,44 @@ function DotScale({ label, value, onPick }) {
     return (React.createElement("div", { style: S.ciRow },
         React.createElement("span", { style: S.ciLab }, label),
         React.createElement("div", { style: { display: "flex", gap: 6 } }, [1, 2, 3, 4, 5].map((n) => (React.createElement("button", { key: n, style: { ...S.ciDot, ...(value >= n ? S.ciDotOn : {}) }, onClick: () => onPick(n) }, n))))));
+}
+function SuggestSheet({ suggestion, unit, onStart, onClose }) {
+    const { items, cats, reason } = suggestion;
+    const [sel, setSel] = useState(() => new Set(items.map((x) => x.id)));
+    const toggle = (id) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+    const chosen = items.filter((x) => sel.has(x.id));
+    const fc = (f) => (f >= 80 ? C.green : f >= 40 ? C.forge : "#D65A45");
+    return (React.createElement("div", { style: S.sheetBackdrop, onClick: onClose },
+        React.createElement("div", { style: S.sheet, onClick: (e) => e.stopPropagation() },
+            React.createElement("div", { style: S.sheetGrip }),
+            React.createElement("div", { style: S.sheetHead },
+                React.createElement("span", { style: S.sheetTitle }, "\u26A1 Today\u2019s session"),
+                React.createElement("button", { style: S.iconBtn, onClick: onClose }, "\u2715")),
+            React.createElement("div", { style: { ...S.hmNote, padding: "0 16px", marginBottom: 12 } }, reason === "starter"
+                ? "A simple full-body start. Log a few sessions and I\u2019ll tailor this to your recovery."
+                : cats.length
+                    ? "Built from your freshest muscles \u2014 " + cats.map((c) => c.cat + " " + c.fresh + "%").join(", ") + ". Deselect anything you don\u2019t want."
+                    : ""),
+            items.length === 0
+                ? React.createElement("div", { style: { padding: "8px 16px 20px", color: C.faint, fontFamily: cond, fontSize: 14, lineHeight: 1.5 } }, reason === "injured"
+                    ? "Everything you train is either still recovering or flagged injured. Today\u2019s probably better as a rest or mobility day."
+                    : "Everything you train is still recovering. A rest day now pays off later \u2014 or add something light by hand.")
+                : React.createElement("div", { style: S.sheetScroll }, items.map((x) => {
+                    const on = sel.has(x.id);
+                    return React.createElement("button", { key: x.id, style: { ...S.uniRow, marginTop: 0, marginBottom: 8, ...(on ? {} : { opacity: 0.45 }) }, onClick: () => toggle(x.id) },
+                        React.createElement("span", { style: { ...S.uniBox, ...(on ? { borderColor: C.forge } : {}) } }, on ? "\u2713" : ""),
+                        React.createElement("span", { style: { flex: 1, textAlign: "left" } },
+                            React.createElement("span", { style: { display: "block", fontWeight: 700 } }, x.name),
+                            React.createElement("span", { style: { display: "block", fontSize: 11, color: C.faint, marginTop: 2 } },
+                                x.category,
+                                x.last ? " \u00B7 last " + fmt(x.last.w) + (x.last.u || unit) : " \u00B7 new")),
+                        x.fresh != null ? React.createElement("span", { style: { ...S.suggFresh, color: fc(x.fresh), borderColor: fc(x.fresh) } }, x.fresh + "%") : null);
+                })),
+            items.length > 0 && React.createElement("div", { style: { padding: "4px 16px 16px" } },
+                React.createElement("button", { style: { ...S.dropBtn, width: "100%", opacity: chosen.length ? 1 : 0.45 }, onClick: () => { if (chosen.length) {
+                        onStart(chosen);
+                        onClose();
+                    } } }, "Start session \u2014 " + chosen.length + (chosen.length === 1 ? " exercise" : " exercises"))))));
 }
 function ReadinessChip({ data, logDate, onLog }) {
     var _a;
@@ -982,6 +1057,69 @@ function recoveryRows(data, today) {
         return { cat, fresh, injured: !!inj, note: (inj && inj.note) || "" };
     }).filter((r) => r.injured || Object.values(data.workouts).some((day) => day.exercises.some((e) => e.category === r.cat && e.sets.some(isWorkDone)) ||
         (r.cat === "HIIT" && (day.cardio || []).some((c) => c.hiit))));
+}
+// Proposes a session from the freshest, non-injured muscle groups, filled with
+// the lifter's own most-used exercises for each (falling back to core library
+// lifts). This leans on the recovery engine the big apps don't have.
+function suggestSession(data, lib, today) {
+    const rows = recoveryRows(data, today);
+    const hist = {};
+    Object.keys(data.workouts).forEach((d) => {
+        (data.workouts[d].exercises || []).forEach((e) => {
+            if (!e.sets.some(isWorkDone))
+                return;
+            if (!hist[e.id])
+                hist[e.id] = { count: 0, last: "" };
+            hist[e.id].count++;
+            if (d > hist[e.id].last)
+                hist[e.id].last = d;
+        });
+    });
+    const lastTop = (exId) => {
+        let w = 0, u = null;
+        Object.keys(data.workouts).forEach((d) => {
+            (data.workouts[d].exercises || []).forEach((e) => {
+                if (e.id !== exId)
+                    return;
+                e.sets.forEach((s) => { if (isWorkDone(s) && (s.weight || 0) > w) {
+                    w = s.weight;
+                    u = s.unit;
+                } });
+            });
+        });
+        return w > 0 ? { w, u } : null;
+    };
+    const pickFrom = (cat, need, used, freshness) => {
+        const inCat = lib.filter((x) => x.category === cat);
+        const withHist = inCat.filter((x) => hist[x.id]).sort((a, b) => (hist[b.id].count - hist[a.id].count) || hist[b.id].last.localeCompare(hist[a.id].last));
+        const withoutHist = inCat.filter((x) => !hist[x.id]);
+        const out = [];
+        for (const x of [...withHist, ...withoutHist]) {
+            if (out.length >= need)
+                break;
+            if (used.has(x.id))
+                continue;
+            used.add(x.id);
+            out.push({ id: x.id, name: x.name, category: x.category, uni: !!x.uni, fresh: freshness, last: lastTop(x.id) });
+        }
+        return out;
+    };
+    const fresh = rows.filter((r) => !r.injured && r.cat !== "HIIT" && r.fresh >= 55).sort((a, b) => b.fresh - a.fresh);
+    const used = new Set();
+    if (fresh.length) {
+        const chosen = fresh.slice(0, 3);
+        const alloc = chosen.length === 1 ? [4] : chosen.length === 2 ? [3, 2] : [2, 2, 1];
+        const items = [];
+        chosen.forEach((r, i) => { pickFrom(r.cat, alloc[i], used, r.fresh).forEach((x) => items.push(x)); });
+        return { items, cats: chosen.map((c) => ({ cat: c.cat, fresh: c.fresh })), reason: null };
+    }
+    const hasHistory = Object.keys(hist).length > 0;
+    if (hasHistory)
+        return { items: [], cats: [], reason: rows.some((r) => r.injured) ? "injured" : "fatigued" };
+    const items = [];
+    ["squat", "bench", "row", "ohp", "curl"].forEach((id) => { const x = lib.find((l) => l.id === id); if (x)
+        items.push({ id: x.id, name: x.name, category: x.category, uni: !!x.uni, fresh: null, last: null }); });
+    return { items, cats: [], reason: "starter" };
 }
 function RecoveryHeatmap({ data, today, onSetInjury }) {
     const [manage, setManage] = useState(false);
@@ -1166,6 +1304,8 @@ function ExerciseCard({ ex, unit, rec, restSecs, hasPrev, prevName, injured, inj
                 if (!s.done && !s.warmup) {
                     s.weight = Math.max(0, r1(rec.weight));
                     s.unit = unit;
+                    if (rec.reps)
+                        s.reps = Math.max(0, Math.round(rec.reps));
                 }
             });
         });
@@ -1237,7 +1377,8 @@ function ExerciseCard({ ex, unit, rec, restSecs, hasPrev, prevName, injured, inj
                 ? `Step up \u2192 ${rec.weight} ${unit} \u00B7 ${rec.reps}+ reps`
                 : rec.mode === "hold"
                     ? `Hold ${rec.weight} ${unit} \u00B7 ${rec.reps}+ reps${rec.why ? ` (${rec.why})` : ""}`
-                    : `${rec.weight} ${unit} \u00B7 beat ${rec.reps} reps`))),
+                    : `${rec.weight} ${unit} \u00B7 beat ${rec.reps} reps`,
+            React.createElement("span", { style: S.recChipTap }, "\u00B7 tap to fill")))),
         restOpen && (React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginTop: 8, marginBottom: 4 } },
             React.createElement("span", { style: S.plateLabel }, "rest between sets"),
             React.createElement("button", { style: S.stepBtn, onClick: () => onRestPref(Math.max(15, restSecs - 15)) }, "\u2212"),
@@ -3178,6 +3319,7 @@ const S = {
     exCat: { fontSize: 11, color: C.faint, marginTop: 3, fontFamily: cond, letterSpacing: 1, textTransform: "uppercase" },
     lastTag: { color: C.forgeDeep, textTransform: "none", letterSpacing: 0.3, marginLeft: 6 },
     iconBtn: { background: "none", border: "none", color: C.faint, fontSize: 15, cursor: "pointer", padding: 4, lineHeight: 1 },
+    guideBtn: { background: "none", border: `1px solid ${C.line}`, borderRadius: 9, color: C.chalk, fontSize: 15, cursor: "pointer", padding: "4px 8px", lineHeight: 1 },
     saveBadge: { display: "flex", alignItems: "center", gap: 5, userSelect: "none" },
     saveDot: { width: 7, height: 7, borderRadius: 7, flex: "none" },
     saveBadgeTx: { fontFamily: cond, fontSize: 11, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase" },
@@ -3202,6 +3344,8 @@ const S = {
     removeSet: { background: "none", border: "none", color: C.faint, fontSize: 11, cursor: "pointer", marginLeft: "auto", textDecoration: "underline", fontFamily: body },
     addSet: { width: "100%", marginTop: 8, background: "none", border: `1px dashed ${C.line}`, color: C.dim, borderRadius: 9, padding: "9px", fontFamily: cond, fontSize: 13, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" },
     addBtn: { width: "100%", marginTop: 6, background: C.forge, color: "#1a1206", border: "none", borderRadius: 13, padding: "15px", fontFamily: cond, fontWeight: 700, fontSize: 17, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 },
+    suggestBtn: { marginTop: 16, background: C.forge, color: "#1a1206", border: "none", borderRadius: 12, padding: "12px 18px", fontFamily: cond, fontWeight: 700, fontSize: 15, letterSpacing: 0.8, textTransform: "uppercase", cursor: "pointer" },
+    suggFresh: { fontFamily: mono, fontSize: 11, fontWeight: 700, padding: "2px 7px", border: "1px solid", borderRadius: 999, flexShrink: 0, marginLeft: 8 },
     unitToggle: { display: "flex", background: C.iron2, border: `1px solid ${C.line}`, borderRadius: 9, padding: 2 },
     unitOpt: { background: "none", border: "none", color: C.faint, fontFamily: mono, fontWeight: 700, fontSize: 13, padding: "5px 11px", borderRadius: 7, cursor: "pointer" },
     unitOptOn: { background: C.iron3, color: C.forge },
@@ -3382,6 +3526,7 @@ Object.assign(S, {
     // progressive overload target chip
     recChip: { display: "inline-block", marginTop: 6, background: "rgba(224,163,60,0.08)", border: `1px solid ${C.forgeDeep}`, color: C.forge, borderRadius: 20, padding: "5px 12px", fontFamily: cond, fontWeight: 700, fontSize: 12, letterSpacing: 0.6, cursor: "pointer", textAlign: "left" },
     recChipDone: { display: "inline-block", marginTop: 6, border: `1px solid ${C.lineSoft}`, color: C.faint, borderRadius: 20, padding: "5px 12px", fontFamily: cond, fontWeight: 700, fontSize: 12, letterSpacing: 0.6 },
+    recChipTap: { marginLeft: 6, opacity: 0.6, fontWeight: 600, textTransform: "uppercase", fontSize: 11, letterSpacing: 0.8 },
     // cardio cards
     cardioRow: { display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" },
     cardioField: { flex: 1, minWidth: 90 },
