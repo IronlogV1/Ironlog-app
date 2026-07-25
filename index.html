@@ -58,7 +58,7 @@ const BUILD = "2026.07.25";
 //  - price: display only (the real charge is set in Stripe).
 //  - code:  shared unlock code shown on the Stripe success page / receipt, for
 //           unlocking on a different device (localStorage is per-device).
-const FOUNDER = { url: "https://buy.stripe.com/REPLACE_ME", price: "\u00A39", code: "FORGE-FOUNDER", token: "founder" };
+const FOUNDER = { url: "https://buy.stripe.com/7sY7sM0hO6cTass5TRafS00", price: "A$27", code: "FORGE-FOUNDER", token: "founder" };
 const KG2LB = 2.20462;
 const r1 = (n) => Math.round(n * 10) / 10;
 const fmt = (n) => {
@@ -3096,10 +3096,10 @@ function FounderCard({ founder, onBuy, onRedeem, price }) {
         React.createElement("button", { style: S.founderBuy, onClick: onBuy }, "\u2692 Become a Founder \u2014 " + price),
         showCode
             ? (React.createElement("div", { style: { marginTop: 10 } },
-                React.createElement("input", { style: { ...S.search, ...(err ? { borderColor: C.red } : {}) }, placeholder: "Founder code from your receipt", value: code, onChange: (e) => { setCode(e.target.value); setErr(false); } }),
+                React.createElement("input", { style: { ...S.search, ...(err ? { borderColor: C.red } : {}) }, placeholder: "Enter your Founder code", value: code, onChange: (e) => { setCode(e.target.value); setErr(false); } }),
                 React.createElement("button", { style: { ...S.dropBtn, width: "100%", marginTop: 8 }, onClick: () => { if (!onRedeem(code))
                         setErr(true); } }, "Unlock"),
-                err && React.createElement("div", { style: { color: C.red, fontFamily: cond, fontSize: 12, marginTop: 6, textAlign: "center", letterSpacing: 0.5 } }, "That code didn\u2019t match \u2014 check your receipt.")))
+                err && React.createElement("div", { style: { color: C.red, fontFamily: cond, fontSize: 12, marginTop: 6, textAlign: "center", letterSpacing: 0.5 } }, "That code didn\u2019t match \u2014 try again.")))
             : React.createElement("button", { style: S.founderCodeLink, onClick: () => setShowCode(true) }, "Already backed it? Enter your code")));
 }
 function CabinetView({ data, unit, today, onSetBodyweight, onImport, onBackedUp, founder, onBuyFounder, onRedeemFounder }) {
