@@ -50,7 +50,7 @@ const C = {
 const STEP = { kg: 2.5, lb: 5 };
 // Bump this whenever we ship. Shown in Cabinet so the live build is verifiable
 // at a glance — stale service-worker caches otherwise look identical.
-const BUILD = "2026.10.25b";
+const BUILD = "2026.10.25e";
 // ---- Founder unlock (one-time supporter tier) ----
 // FILL THESE IN once your Stripe payment link is live:
 //  - url:   the Stripe Payment Link. Set its "after payment" redirect to
@@ -229,6 +229,7 @@ function IronLog() {
     const [workoutsOpen, setWorkoutsOpen] = useState(false);
     const [suggestOpen, setSuggestOpen] = useState(false);
     const [guideOpen, setGuideOpen] = useState(false);
+    const [finRun, setFinRun] = useState(null); // active Finisher challenge
     const [gate, setGate] = useState(null); // { title, blurb } for a locked Founder feature
     const [dropReveal, setDropReveal] = useState(null); // relic id just dropped
     const [rest, setRest] = useState(null); // { seconds, total }
@@ -453,7 +454,7 @@ function IronLog() {
                 break;
             misses++;
         }
-        const hit = misses >= PITY_AT - 1 || Math.random() < DROP_CHANCE;
+        const hit = misses >= PITY_AT - 1 || Math.random() < DROP_CHANCE * (day.finisherPB ? 2 : 1); // Finisher record doubles the roll
         const relic = hit ? rollRelic() : "";
         setData((p) => ({ ...p, drops: { ...(p.drops || {}), [dateIso]: relic } }));
         return hit ? relic : null;
@@ -484,6 +485,41 @@ function IronLog() {
     });
     const markGuideSeen = () => setData((p) => (p.guideSeen ? p : { ...p, guideSeen: true }));
     const openGuide = () => { setGuideOpen(true); markGuideSeen(); };
+    // Records the Finisher: appends the set to the exercise, updates the lift's record,
+    // levels the weight on Forged, flags the day for the drop bonus on a record.
+    const completeFinisher = (run, reps) => {
+        const prev = (data.finishers || {})[run.exId];
+        const out = finisherOutcome(prev, reps, run.w, run.unit, run.name);
+        updateEx(run.exUid, (e) => {
+            e.sets.push({ weight: run.w, reps, unit: run.unit, done: true, warmup: false, finisher: true, side: e.unilateral ? "B" : null });
+        });
+        if (out.record)
+            mutateDay((day) => { day.finisherPB = true; });
+        setData((p) => {
+            const all = { ...(p.finishers || {}) };
+            const r = prev ? { ...prev, hist: [...(prev.hist || [])] } : { name: run.name, w: run.w, unit: run.unit, level: 1, best: 0, last: null, hist: [] };
+            r.name = run.name;
+            if (reps > (r.best || 0))
+                r.best = reps;
+            r.last = reps;
+            r.lastDate = logDate;
+            r.hist = [...r.hist, { d: logDate, r: reps, w: run.w, lvl: r.level || 1 }].slice(-60);
+            if (out.leveled) {
+                r.level = (r.level || 1) + 1;
+                r.w = out.nextW;
+                r.best = 0;
+                r.last = null;
+            }
+            all[run.exId] = r;
+            return { ...p, finishers: all };
+        });
+        try {
+            if (window.goatcounter && window.goatcounter.count)
+                window.goatcounter.count({ path: "finisher-done", title: "Finisher done", event: true });
+        }
+        catch (e) { }
+        return out;
+    };
     const buyFounder = () => {
         try {
             if (window.goatcounter && window.goatcounter.count)
@@ -520,7 +556,7 @@ function IronLog() {
         const effRest = nextLinked ? 0 : groupRest;
         const beginRest = () => { if (effRest > 0) setRest({ seconds: effRest, total: effRest }); };
         const wKg = inUnit(set, "kg");
-        if (set.warmup || wKg <= 0 || (set.reps || 0) <= 0) {
+        if (set.warmup || set.finisher || wKg <= 0 || (set.reps || 0) <= 0) {
             beginRest();
             return;
         }
@@ -530,7 +566,7 @@ function IronLog() {
                 if (e.id !== ex.id)
                     return;
                 e.sets.forEach((s) => {
-                    if (!isWorkDone(s) || (s.reps || 0) <= 0)
+                    if (!isWorkDone(s) || s.finisher || (s.reps || 0) <= 0)
                         return;
                     const w = inUnit(s, "kg");
                     if (w > bestW)
@@ -542,12 +578,42 @@ function IronLog() {
             });
         });
         const eNow = e1rm(set, "kg");
-        const tier = bestW > 0 && wKg > bestW ? "weight" : bestE > 0 && eNow > bestE ? "e1rm" : null;
+        let tier = bestW > 0 && wKg > bestW ? "weight" : bestE > 0 && eNow > bestE ? "e1rm" : null;
+        let extra = {};
+        if (!tier) {
+            // Volume-friendly records: heaviest weight for at least R reps (R >= 8),
+            // then the moment today's work on this lift passes the best prior session.
+            const R = [1, 3, 5, 8, 10, 12, 15, 20].filter((x) => x <= (set.reps || 0)).pop();
+            let bestAtR = 0;
+            const dayVol = {};
+            Object.keys(data.workouts).forEach((d) => data.workouts[d].exercises.forEach((e) => {
+                if (e.id !== ex.id) return;
+                e.sets.forEach((s) => {
+                    if (!isWorkDone(s) || (s.reps || 0) <= 0) return;
+                    const w = inUnit(s, "kg");
+                    if (R && !s.finisher && s.reps >= R && w > bestAtR) bestAtR = w;
+                    dayVol[d] = (dayVol[d] || 0) + w * s.reps * sideMult(s);
+                });
+            }));
+            if (R >= 8 && bestAtR > 0 && wKg > bestAtR + 0.01) {
+                tier = "reprange";
+                extra = { R };
+            }
+            else {
+                const todayPrev = dayVol[logDate] || 0;
+                const bestPrior = Math.max(0, ...Object.keys(dayVol).filter((d) => d !== logDate).map((d) => dayVol[d]));
+                const nowVol = todayPrev + wKg * (set.reps || 0) * sideMult(set);
+                if (bestPrior > 0 && todayPrev <= bestPrior && nowVol > bestPrior) {
+                    tier = "volume";
+                    extra = { vol: fmt(unit === "kg" ? nowVol : nowVol * KG2LB) };
+                }
+            }
+        }
         // Rest fires the instant a working set is ticked. A PR card (if any) sits
         // on top of the already-counting timer, so dismissing it reveals the clock.
         beginRest();
         if (tier)
-            setPrPop({ tier, name: ex.name, w: fmt(inUnit(set, unit)), reps: set.reps || 0 });
+            setPrPop({ tier, name: ex.name, w: fmt(inUnit(set, unit)), reps: set.reps || 0, ...extra });
     };
     const finishSession = () => {
         flushSave();
@@ -645,6 +711,8 @@ function IronLog() {
         injuries: obj.injuries && typeof obj.injuries === "object" ? obj.injuries : {},
         guideSeen: !!obj.guideSeen,
         founder: !!obj.founder,
+        finishers: obj.finishers && typeof obj.finishers === "object" ? obj.finishers : {},
+        finisherOff: !!obj.finisherOff,
     });
     // recent exercise ids across history, newest first
     const recentIds = (() => {
@@ -676,9 +744,10 @@ function IronLog() {
                 React.createElement(Tab, { active: view === "week", onClick: () => setView("week") }, "Week"),
                 React.createElement(Tab, { active: view === "progress", onClick: () => setView("progress") }, "Progress"),
                 React.createElement(Tab, { active: view === "cabinet", onClick: () => setView("cabinet") }, "Cabinet"))),
-        React.createElement("main", { style: S.main }, !loaded ? (React.createElement("div", { style: S.loading }, "Loading the rack\u2026")) : view === "log" ? (React.createElement(LogView, { dateLabel: headDate(logDate), exercises: logEx, todayExercises: todayEx, unit: unit, data: data, today: today, logDate: logDate, onChangeDate: setLogDate, dayTime: ((_c = data.workouts[logDate]) === null || _c === void 0 ? void 0 : _c.time) || "", onChangeTime: setDayTime, restMarked: restMarked, restKind: restKind, onRest: markRestDay, onUndoRest: clearRestDay, onAdd: () => setPickerOpen(true), onSetDone: handleSetDone, onRestPref: setRestPref, onLogBW: logBW, onLogCheckin: logCheckin, cardio: ((_d = data.workouts[logDate]) === null || _d === void 0 ? void 0 : _d.cardio) || [], onAddCardio: () => setCardioOpen(true), updateCardio: updateCardio, removeCardio: removeCardio, onOpenWorkouts: () => setWorkoutsOpen(true), onSuggest: () => setSuggestOpen(true), hasTemplates: (data.templates || []).length > 0, updateEx: updateEx, removeEx: removeEx, startRest: (s) => setRest({ seconds: s, total: s }), onShare: finishSession, freezeAvail: freezeAvail, onFreeze: useFreeze, activeSession: ((data.workouts[logDate] || {}).activeSession) || 0, sessionFinished: ((data.workouts[logDate] || {}).finished) || {}, onStartAnother: startAnotherWorkout, founder: !!data.founder, onGate: setGate })) : view === "week" ? (React.createElement(WeekView, { data: data, unit: unit, today: today, onShareMonth: (m) => setShareMonth(m) })) : view === "cabinet" ? (React.createElement(CabinetView, { data: data, unit: unit, today: today, onSetBodyweight: setBodyweight, onImport: importData, onBackedUp: () => setData((p) => ({ ...p, lastBackup: Date.now() })), founder: data.founder, onBuyFounder: buyFounder, onRedeemFounder: redeemFounder })) : (React.createElement(ProgressView, { data: data, unit: unit, progId: progId, setProgId: setProgId, onSetInjury: setInjury, founder: !!data.founder, onGate: setGate }))),
+        React.createElement("main", { style: S.main }, !loaded ? (React.createElement("div", { style: S.loading }, "Loading the rack\u2026")) : view === "log" ? (React.createElement(LogView, { dateLabel: headDate(logDate), exercises: logEx, todayExercises: todayEx, unit: unit, data: data, today: today, logDate: logDate, onChangeDate: setLogDate, dayTime: ((_c = data.workouts[logDate]) === null || _c === void 0 ? void 0 : _c.time) || "", onChangeTime: setDayTime, restMarked: restMarked, restKind: restKind, onRest: markRestDay, onUndoRest: clearRestDay, onAdd: () => setPickerOpen(true), onSetDone: handleSetDone, onRestPref: setRestPref, onLogBW: logBW, onLogCheckin: logCheckin, cardio: ((_d = data.workouts[logDate]) === null || _d === void 0 ? void 0 : _d.cardio) || [], onAddCardio: () => setCardioOpen(true), updateCardio: updateCardio, removeCardio: removeCardio, onOpenWorkouts: () => setWorkoutsOpen(true), onSuggest: () => setSuggestOpen(true), hasTemplates: (data.templates || []).length > 0, updateEx: updateEx, removeEx: removeEx, startRest: (s) => setRest({ seconds: s, total: s }), onShare: finishSession, freezeAvail: freezeAvail, onFreeze: useFreeze, activeSession: ((data.workouts[logDate] || {}).activeSession) || 0, sessionFinished: ((data.workouts[logDate] || {}).finished) || {}, onStartAnother: startAnotherWorkout, founder: !!data.founder, onGate: setGate, onFinisher: setFinRun })) : view === "week" ? (React.createElement(WeekView, { data: data, unit: unit, today: today, onShareMonth: (m) => setShareMonth(m) })) : view === "cabinet" ? (React.createElement(CabinetView, { data: data, unit: unit, today: today, onSetBodyweight: setBodyweight, onImport: importData, onBackedUp: () => setData((p) => ({ ...p, lastBackup: Date.now() })), founder: data.founder, onBuyFounder: buyFounder, onRedeemFounder: redeemFounder, onGate: setGate, onToggleFinisher: () => setData((p) => ({ ...p, finisherOff: !p.finisherOff })) })) : (React.createElement(ProgressView, { data: data, unit: unit, progId: progId, setProgId: setProgId, onSetInjury: setInjury, founder: !!data.founder, onGate: setGate }))),
         guideOpen && (React.createElement(GuideSheet, { onClose: () => setGuideOpen(false) })),
         loaded && view === "log" && !data.guideSeen && (React.createElement(GuidePrompt, { onOpen: openGuide, onDismiss: markGuideSeen })),
+        finRun && (React.createElement(FinisherRun, { run: finRun, unit: unit, onComplete: (reps) => completeFinisher(finRun, reps), onClose: () => setFinRun(null) })),
         gate && (React.createElement(FounderGate, { gate: gate, price: FOUNDER.price, onBuy: () => { buyFounder(); }, onCode: () => { setGate(null); setView("cabinet"); }, onClose: () => setGate(null) })),
         founderWelcome && (React.createElement(FounderWelcome, { onClose: () => setFounderWelcome(false) })),
         coffeeAsk && (React.createElement(CoffeeAsk, { ask: coffeeAsk, onPick: (action) => { if (action === "never") markCoffeeAsk("never"); else markCoffeeAsk(coffeeAsk.key); setCoffeeAsk(null); } })),
@@ -710,10 +779,13 @@ function IronLog() {
         shareDay && (React.createElement(SessionShare, { data: data, unit: unit, dateIso: shareDay, saveState: saveState, lastSaved: lastSaved, storagePresent: storagePresent, onRetry: flushSave, onClose: () => { setShareDay(null); if (pendingCoffee) { setCoffeeAsk(pendingCoffee); setPendingCoffee(null); } } }))));
 }
 /* ---------------- Log view ---------------- */
-function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logDate, onChangeDate, dayTime, onChangeTime, restMarked, restKind, onRest, onUndoRest, onAdd, onSetDone, onRestPref, onLogBW, onLogCheckin, cardio, onAddCardio, updateCardio, removeCardio, onOpenWorkouts, onSuggest, hasTemplates, updateEx, removeEx, startRest, onShare, freezeAvail, onFreeze, activeSession, sessionFinished, onStartAnother, founder, onGate }) {
+function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logDate, onChangeDate, dayTime, onChangeTime, restMarked, restKind, onRest, onUndoRest, onAdd, onSetDone, onRestPref, onLogBW, onLogCheckin, cardio, onAddCardio, updateCardio, removeCardio, onOpenWorkouts, onSuggest, hasTemplates, updateEx, removeEx, startRest, onShare, freezeAvail, onFreeze, activeSession, sessionFinished, onStartAnother, founder, onGate, onFinisher }) {
     const isWork = (s) => s.done && !s.warmup;
     const isBackdate = logDate !== today;
     const hasPreCheckin = !!(((data.checkins || {})[logDate]) || {}).pre;
+    const dayFocus = ((((data.checkins || {})[logDate]) || {}).pre || {}).focus || "strength";
+    // Free users see the Finisher teaser once a day (first eligible lift), not on every card.
+    const firstFinUid = founder ? null : (exercises.find((e) => finisherEligible(e) && finisherTarget(data, e, unit)) || {}).uid;
     const needCheckin = !isBackdate && !hasPreCheckin && exercises.some((e) => !e.timed);
     const timeLabel = dayTime ? fmtTime(dayTime) : (isBackdate ? "Add session time" : "Set time");
     const timeStyle = dayTime ? S.timeText : (isBackdate ? S.timeNudge : S.timeFaint);
@@ -760,7 +832,7 @@ function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logD
         }
         return React.createElement("div", { key: "s" + s, style: { marginBottom: fin ? 12 : 0 } },
             header,
-            exs.map((ex, exI) => React.createElement(ExerciseCard, { key: ex.uid, ex: ex, unit: unit, hasPrev: exI > 0, prevName: exI > 0 ? exs[exI - 1].name : null, rec: (ex.timed || !hasPreCheckin) ? null : overloadFor(data, ex.id, ex.category, logDate, unit), restSecs: restFor(data, ex), injured: !!(data.injuries || {})[ex.category], injuryNote: (((data.injuries || {})[ex.category]) || {}).note || "", onDone: (set) => onSetDone(ex, set, restFor(data, ex)), onRestPref: (secs) => onRestPref(ex.id, secs), update: (fn) => updateEx(ex.uid, fn), remove: () => removeEx(ex.uid), founder: founder, onGate: onGate })),
+            exs.map((ex, exI) => React.createElement(ExerciseCard, { key: ex.uid, ex: ex, unit: unit, hasPrev: exI > 0, prevName: exI > 0 ? exs[exI - 1].name : null, rec: (ex.timed || !hasPreCheckin) ? null : overloadFor(data, ex.id, ex.category, logDate, unit, ex.focus || dayFocus), dayFocus: dayFocus, restSecs: restFor(data, ex), injured: !!(data.injuries || {})[ex.category], injuryNote: (((data.injuries || {})[ex.category]) || {}).note || "", onDone: (set) => onSetDone(ex, set, restFor(data, ex)), onRestPref: (secs) => onRestPref(ex.id, secs), update: (fn) => updateEx(ex.uid, fn), remove: () => removeEx(ex.uid), founder: founder, onGate: onGate, onFinisher: onFinisher, finisherOk: !isBackdate && !data.finisherOff && (founder || ex.uid === firstFinUid), finTarget: finisherTarget(data, ex, unit) })),
             cds.map((c) => React.createElement(CardioCard, { key: c.uid, c: c, unit: unit, last: cardioLastFor(data, c.id, logDate, unit), update: (fn) => updateCardio(c.uid, fn), remove: () => removeCardio(c.uid) })));
     }));
     return (React.createElement("div", null,
@@ -1054,22 +1126,21 @@ function CoffeeAsk({ ask, onPick }) {
                 React.createElement("button", { style: { ...S.hiitCtlDark, flex: 1 }, onClick: () => onPick("never") }, "Don't ask again")))));
 }
 function PRPop({ pop, unit, onClose }) {
-    const weightTier = pop.tier === "weight";
+    const T = {
+        weight: { eye: "🏆 New weight record", icon: "🏆", hot: true, lore: "The heaviest this bar has ever been for you. Forged, not found." },
+        e1rm: { eye: "📈 New rep record", icon: "📈", lore: "Same iron, more reps — your estimated 1RM just moved." },
+        reprange: { eye: "🎯 New " + pop.R + "RM", icon: "🎯", lore: "The heaviest you’ve ever moved for " + pop.R + "+ reps. Volume work, banked." },
+        volume: { eye: "≋ Session volume record", icon: "≋", lore: pop.vol + " " + unit + " on this lift today — more work than any session before." },
+    }[pop.tier] || { eye: "Record", icon: "🏆", lore: "" };
+    const hot = !!T.hot;
     return (React.createElement("div", { style: { ...S.sheetBackdrop, zIndex: 50 }, onClick: onClose },
-        React.createElement("div", { style: { ...S.dropCard, borderColor: weightTier ? C.forge : C.lineSoft, borderWidth: weightTier ? 3 : 2 }, onClick: (e) => e.stopPropagation() },
-            React.createElement("div", { style: { ...S.dropEyebrow, color: weightTier ? C.forge : C.faint } }, weightTier ? "🏆 New weight record" : "📈 New rep record"),
-            React.createElement("div", { style: S.dropIcon }, weightTier ? "🏆" : "📈"),
+        React.createElement("div", { style: { ...S.dropCard, borderColor: hot ? C.forge : C.lineSoft, borderWidth: hot ? 3 : 2 }, onClick: (e) => e.stopPropagation() },
+            React.createElement("div", { style: { ...S.dropEyebrow, color: hot ? C.forge : C.faint } }, T.eye),
+            React.createElement("div", { style: S.dropIcon }, T.icon),
             React.createElement("div", { style: S.dropName }, pop.name),
-            React.createElement("div", { style: { ...S.dropRarity, color: weightTier ? C.forge : C.chalk, borderColor: weightTier ? C.forge : C.lineSoft } },
-                pop.w,
-                " ",
-                unit,
-                " \u00D7 ",
-                pop.reps),
-            React.createElement("div", { style: S.dropLore }, weightTier
-                ? "The heaviest this bar has ever been for you. Forged, not found."
-                : "Same iron, more reps — your estimated 1RM just moved."),
-            React.createElement("button", { style: S.dropBtn, onClick: onClose }, "Rest \u25B6"))));
+            React.createElement("div", { style: { ...S.dropRarity, color: hot ? C.forge : C.chalk, borderColor: hot ? C.forge : C.lineSoft } }, pop.w, " ", unit, " × ", pop.reps),
+            React.createElement("div", { style: S.dropLore }, T.lore),
+            React.createElement("button", { style: S.dropBtn, onClick: onClose }, "Rest ▶"))));
 }
 /* ---------------- Session check-ins ---------------- */
 function DotScale({ label, value, onPick }) {
@@ -1350,15 +1421,15 @@ function DailyStrip({ data, unit, logDate, onLogBW, onLogCheckin }) {
     };
     const openCI = () => {
         setF(pre
-            ? { energy: pre.energy, sleep: pre.sleep, muscles: pre.muscles != null ? pre.muscles : 6 - (pre.soreness || 3), note: pre.note || "" }
-            : { energy: 0, sleep: 0, muscles: 0, note: "" });
+            ? { energy: pre.energy, sleep: pre.sleep, muscles: pre.muscles != null ? pre.muscles : 6 - (pre.soreness || 3), note: pre.note || "", focus: pre.focus || "strength" }
+            : { energy: 0, sleep: 0, muscles: 0, note: "", focus: "strength" });
         setMode("ci");
     };
     const canCI = f.energy > 0 && f.sleep > 0 && f.muscles > 0;
     const saveCI = () => {
         if (!canCI)
             return;
-        onLogCheckin(logDate, "pre", { energy: f.energy, sleep: f.sleep, muscles: f.muscles, note: f.note.trim() || undefined });
+        onLogCheckin(logDate, "pre", { energy: f.energy, sleep: f.sleep, muscles: f.muscles, note: f.note.trim() || undefined, focus: f.focus || "strength" });
         setMode(null);
     };
     if (mode === "bw") {
@@ -1380,6 +1451,10 @@ function DailyStrip({ data, unit, logDate, onLogBW, onLogCheckin }) {
             React.createElement(DotScale, { label: "Sleep", value: f.sleep, onPick: (n) => setF((p) => ({ ...p, sleep: n })) }),
             React.createElement(DotScale, { label: "Muscles", value: f.muscles, onPick: (n) => setF((p) => ({ ...p, muscles: n })) }),
             React.createElement("div", { style: S.ciScaleHint }, "1 = rough \u00B7 5 = great \u2014 for all three"),
+            React.createElement("div", { style: S.ciRow },
+                React.createElement("span", { style: S.ciLab }, "Today\u2019s focus"),
+                React.createElement("div", { style: { display: "flex", gap: 6 } }, ["strength", "volume"].map((k) => React.createElement("button", { key: k, style: { ...S.typeOpt, ...((f.focus || "strength") === k ? (k === "volume" ? S.typeWarmOn : S.typeOptOn) : {}) }, onClick: () => setF((p) => ({ ...p, focus: k })) }, k === "strength" ? "\u25CE Strength" : "\u224B Volume")))),
+            React.createElement("div", { style: S.ciScaleHint }, "Strength: heavier, 5\u201310 reps \u00B7 Volume: lighter, 10\u201320 reps. Override per lift on its card."),
             React.createElement("input", { style: { ...S.search, marginTop: 8 }, placeholder: "Note \u2014 optional", value: f.note, onChange: (e) => setF((p) => ({ ...p, note: e.target.value })) }),
             React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 10 } },
                 React.createElement("button", { style: { ...S.bwSave, flex: 1, opacity: canCI ? 1 : 0.45 }, onClick: saveCI }, "Save check-in"),
@@ -1391,7 +1466,7 @@ function DailyStrip({ data, unit, logDate, onLogBW, onLogCheckin }) {
             React.createElement("span", { style: shownBW ? S.bwVal : S.bwGhost }, shownBW ? `${shownBW} ${unit}` : "weigh-in")),
         React.createElement("button", { style: { ...S.bwRow, flex: 1 }, onClick: openCI },
             React.createElement("span", { style: S.bwLab }, "\u2600"),
-            React.createElement("span", { style: r != null ? { ...S.bwVal, color: r >= 70 ? C.green : r >= 40 ? C.chalk : C.forge } : S.bwGhost }, r != null ? `${r}% ${readinessBand(r)}` : "check in"))));
+            React.createElement("span", { style: r != null ? { ...S.bwVal, color: r >= 70 ? C.green : r >= 40 ? C.chalk : C.forge } : S.bwGhost }, r != null ? `${r}% ${readinessBand(r)}${pre && pre.focus === "volume" ? " \u00B7 \u224B vol" : ""}` : "check in"))));
 }
 
 function CardioCard({ c, unit, last, update, remove }) {
@@ -1452,7 +1527,10 @@ function CardioCard({ c, unit, last, update, remove }) {
                     React.createElement("input", { style: S.readout, inputMode: "numeric", value: c.level ? c.level : "", placeholder: "\u2013", onChange: (e) => setLvl(parseInt(e.target.value) || 0) }),
                     React.createElement("button", { style: S.stepBtn, onClick: () => setLvl((c.level || 0) + 1) }, "+")))))));
 }
-function ExerciseCard({ ex, unit, rec, restSecs, hasPrev, prevName, injured, injuryNote, onDone, onRestPref, update, remove, founder, onGate }) {
+function ExerciseCard({ ex, unit, rec, restSecs, hasPrev, prevName, injured, injuryNote, onDone, onRestPref, update, remove, founder, onGate, dayFocus, onFinisher, finisherOk, finTarget }) {
+    const effFocus = ex.focus || dayFocus || "strength";
+    // Tap flips this lift to the other focus; flipping back to the day's default clears the override.
+    const toggleFocus = () => update((e) => { const nf = effFocus === "volume" ? "strength" : "volume"; if (nf === (dayFocus || "strength")) delete e.focus; else e.focus = nf; });
     const barbell = BARBELL_IDS.has(ex.id);
     const [wuMsg, setWuMsg] = useState(null);
     const canWarm = !ex.timed && ex.category !== "HIIT" && ex.category !== "Core";
@@ -1528,7 +1606,7 @@ function ExerciseCard({ ex, unit, rec, restSecs, hasPrev, prevName, injured, inj
     const addSet = () => update((e) => {
         const last = e.sets[e.sets.length - 1];
         const side = e.unilateral ? (last && last.side) || "B" : null;
-        e.sets.push(last ? { ...last, done: false, warmup: false, side } : { weight: 0, reps: 0, unit, done: false, warmup: false, side });
+        e.sets.push(last ? { ...last, done: false, warmup: false, finisher: false, side } : { weight: 0, reps: 0, unit, done: false, warmup: false, side });
     });
     const removeSet = (i) => update((e) => { e.sets.splice(i, 1); });
     const wDisp = (s) => fmt(inUnit(s, unit));
@@ -1537,6 +1615,8 @@ function ExerciseCard({ ex, unit, rec, restSecs, hasPrev, prevName, injured, inj
     // working sets numbered 1..n; warm-ups "W"; unilateral sets show their side
     let wc = 0;
     const labels = ex.sets.map((s) => {
+        if (s.finisher)
+            return "F";
         if (s.warmup)
             return "W";
         wc += 1;
@@ -1552,6 +1632,7 @@ function ExerciseCard({ ex, unit, rec, restSecs, hasPrev, prevName, injured, inj
             React.createElement("button", { style: S.iconBtn, "aria-label": "Remove exercise", onClick: remove }, "\u2715")),
         injured ? React.createElement("div", { style: S.injTag }, "\u26A0 " + ex.category + " is flagged as injured" + (injuryNote ? " \u2014 " + injuryNote : "") + " \u00B7 train with caution") : null,
         React.createElement("div", { style: S.exControls },
+            React.createElement("button", { style: { ...S.uniToggle, ...(effFocus === "volume" ? S.uniToggleOn : {}) }, "aria-label": "Switch training focus for this lift", onClick: toggleFocus }, (effFocus === "volume" ? "\u224B volume" : "\u25CE strength") + (ex.focus ? " \u2022" : "")),
             hasPrev ? React.createElement("button", { style: { ...S.uniToggle, ...(ex.ssWithPrev ? S.uniToggleOn : {}) }, "aria-label": "Superset with the exercise above", onClick: toggleSS }, "\u26D3 ss") : null,
             React.createElement("button", { style: { ...S.uniToggle, ...(restOpen ? S.uniToggleOn : {}) }, "aria-label": "Rest time between sets", onClick: () => setRestOpen((o) => !o) },
                 "\u23F2 ",
@@ -1568,7 +1649,7 @@ function ExerciseCard({ ex, unit, rec, restSecs, hasPrev, prevName, injured, inj
             unit,
             " \u00B7 ",
             rec.reps,
-            rec.mode === "reps" ? `\u2013${rec.hi}` : rec.mode === "recover" ? "" : "+",
+            rec.mode === "reps" ? `\u2013${rec.hi}` : (rec.mode === "recover" || rec.mode === "start") ? "" : "+",
             " reps")) : (React.createElement("button", { style: S.recChip, onClick: applyRec },
             "\uD83C\uDFAF ",
             rec.mode === "load"
@@ -1577,7 +1658,9 @@ function ExerciseCard({ ex, unit, rec, restSecs, hasPrev, prevName, injured, inj
                     ? `Hold ${rec.weight} ${unit} \u00B7 ${rec.reps}+ reps${rec.why ? ` (${rec.why})` : ""}`
                     : rec.mode === "recover"
                         ? `Recover \u00B7 ${rec.weight} ${unit} \u00B7 ${rec.reps} reps${rec.why ? ` (${rec.why})` : ""}`
-                        : `${rec.weight} ${unit} \u00B7 beat ${rec.reps} reps`,
+                        : rec.mode === "start"
+                            ? `Start ${rec.focus} \u2192 ${rec.weight} ${unit} \u00B7 ${rec.reps}\u2013${rec.hi} reps${rec.why ? ` (${rec.why})` : ""}`
+                            : `${rec.weight} ${unit} \u00B7 beat ${rec.reps} reps`,
             React.createElement("span", { style: S.recChipTap }, "\u00B7 tap to fill")))),
         restOpen && (React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginTop: 8, marginBottom: 4 } },
             React.createElement("span", { style: S.plateLabel }, "rest between sets"),
@@ -1629,7 +1712,37 @@ function ExerciseCard({ ex, unit, rec, restSecs, hasPrev, prevName, injured, inj
                     React.createElement("button", { style: { ...S.typeOpt, ...(!s.warmup ? S.typeOptOn : {}) }, onClick: () => s.warmup && toggleWarm(i) }, "Working"),
                     React.createElement("button", { style: { ...S.typeOpt, ...(s.warmup ? S.typeWarmOn : {}) }, onClick: () => !s.warmup && toggleWarm(i) }, "Warm-up"),
                     ex.sets.length > 1 && (React.createElement("button", { style: S.removeSet, onClick: () => removeSet(i) }, "remove")))))))),
-        React.createElement("button", { style: S.addSet, onClick: addSet }, "+ add set")));
+        React.createElement("button", { style: S.addSet, onClick: addSet }, "+ add set"),
+        (() => {
+            const finSet = ex.sets.find((x) => x.finisher && x.done);
+            if (finSet) {
+                const t = finTier(finSet.reps);
+                return React.createElement("div", { style: S.finDone }, "\u2692 Finisher \u00B7 " + finSet.reps + " reps @ " + fmt(inUnit(finSet, unit)) + " " + unit + (t ? " \u00B7 " + t.icon + " " + t.label : ""));
+            }
+            const work = ex.sets.filter((x) => !x.warmup && !x.finisher);
+            if (!finTarget || !finisherOk || ex.finisherSkip || !work.length || !work.every((x) => x.done))
+                return null;
+            const skip = () => update((e) => { e.finisherSkip = true; });
+            if (!founder)
+                return React.createElement("div", { style: S.finCard },
+                    React.createElement("div", { style: S.finEye }, "\u2692 The Finisher \u00B7 Founders only"),
+                    React.createElement("div", { style: S.finSub }, "One set to failure at a fixed weight. Beat your record, climb Iron \u2192 Forged, level up."),
+                    React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 10 } },
+                        React.createElement("button", { style: { ...S.finGo, flex: 2 }, onClick: () => onGate && onGate(FINISHER_GATE) }, "Unlock \u2192"),
+                        React.createElement("button", { style: { ...S.finSkip, flex: 1 }, onClick: skip }, "Skip")));
+            const rec = finTarget.rec;
+            const wShow = fmt(inUnit({ weight: finTarget.w, unit: finTarget.unit }, unit));
+            const t = rec && rec.best ? finTier(rec.best) : null;
+            return React.createElement("div", { style: S.finCard },
+                React.createElement("div", { style: S.finEye }, "\u2692 The Finisher" + (rec && rec.level > 1 ? " \u00B7 Level " + rec.level : "")),
+                React.createElement("div", { style: S.finBig }, wShow + " " + unit + " \u00B7 reps to failure"),
+                React.createElement("div", { style: S.finSub }, rec && rec.best
+                    ? "Record " + rec.best + (t ? " " + t.icon : "") + (rec.last != null ? " \u00B7 Last " + rec.last : "") + " \u2014 beat it?"
+                    : "First attempt \u2014 set the bar."),
+                React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 10 } },
+                    React.createElement("button", { style: { ...S.finGo, flex: 2 }, onClick: () => onFinisher && onFinisher({ exUid: ex.uid, exId: ex.id, name: ex.name, w: finTarget.w, unit: finTarget.unit, rec }) }, "Take it \uD83D\uDD25"),
+                    React.createElement("button", { style: { ...S.finSkip, flex: 1 }, onClick: skip }, "Skip")));
+        })()));
 }
 /* ---------------- Distance forged + cardio targets ---------------- */
 function DistancePanel({ data, unit }) {
@@ -1904,6 +2017,9 @@ function LiftAnalytics({ data, exId, unit, today }) {
         a.best && React.createElement("div", { style: S.lineItem },
             React.createElement("span", { style: S.lineKey }, "Best set ever"),
             React.createElement("span", { style: S.lineVal }, fmt(a.best.w) + " " + unit + " × " + a.best.reps + " · " + shortDate(a.best.date))),
+        a.bestSess && React.createElement("div", { style: S.lineItem },
+            React.createElement("span", { style: S.lineKey }, "Best session volume"),
+            React.createElement("span", { style: S.lineVal }, fmt(a.bestSess.vol) + " " + unit + " \u00B7 " + shortDate(a.bestSess.date))),
         React.createElement("div", { style: S.lineItem },
             React.createElement("span", { style: S.lineKey }, "Lifetime on this lift"),
             React.createElement("span", { style: S.lineVal }, fmt(a.totalVol) + " " + unit + " · " + a.totalReps.toLocaleString() + " reps")),
@@ -1923,7 +2039,126 @@ function LiftAnalytics({ data, exId, unit, today }) {
             ? "This week " + fmt(thisWeek) + " " + unit + " vs " + fmt(avgPrior) + " avg of prior 7"
             : "Log a few weeks to see your trend")));
 }
+const FINISHER_GATE = { title: "The Finisher", blurb: "After your working sets, one optional set to failure at a fixed weight. Chase your rep record, climb Iron → Bronze → Silver → Gold → Forged, and level the weight up when you get there." };
+function FinisherRun({ run, unit, onComplete, onClose }) {
+    const [stage, setStage] = useState("go"); // go | count | reveal
+    const [t0] = useState(() => Date.now());
+    const [now, setNow] = useState(Date.now());
+    const [secs, setSecs] = useState(0);
+    const [reps, setReps] = useState(0);
+    const [res, setRes] = useState(null);
+    const [shown, setShown] = useState(0);
+    const [hint, setHint] = useState("");
+    useEffect(() => {
+        if (stage !== "go")
+            return;
+        const id = setInterval(() => setNow(Date.now()), 250);
+        return () => clearInterval(id);
+    }, [stage]);
+    useEffect(() => {
+        if (stage !== "reveal" || !res)
+            return;
+        let n = 0;
+        const stepMs = Math.max(25, Math.min(80, 900 / Math.max(1, res.reps)));
+        const id = setInterval(() => {
+            n++;
+            setShown(n);
+            if (n >= res.reps) {
+                clearInterval(id);
+                try {
+                    if (navigator.vibrate)
+                        navigator.vibrate(res.record || res.leveled ? [90, 60, 90, 60, 220] : 40);
+                }
+                catch (e) { }
+            }
+        }, stepMs);
+        return () => clearInterval(id);
+    }, [stage, res]);
+    const rec = run.rec;
+    const wShow = fmt(inUnit({ weight: run.w, unit: run.unit }, unit));
+    const el = Math.floor((now - t0) / 1000);
+    if (stage === "go") {
+        return (React.createElement("div", { style: { ...S.hiitOverlay, background: "#2a1405" } },
+            React.createElement("div", { style: S.hiitPhase }, "⚒ The Finisher"),
+            React.createElement("div", { style: { ...S.hiitRound, marginTop: 6 } }, run.name + " · " + wShow + " " + unit),
+            React.createElement("div", { style: S.hiitBig }, mmss(el)),
+            React.createElement("div", { style: { ...S.hiitRound, maxWidth: 300, textAlign: "center", lineHeight: 1.5 } }, "To failure. The last clean rep counts."),
+            rec && rec.best ? React.createElement("div", { style: { ...S.finTarget, marginTop: 14 } }, "Record " + rec.best + (rec.last != null ? " · Last " + rec.last : "")) : React.createElement("div", { style: { ...S.finTarget, marginTop: 14 } }, "First attempt — set the bar"),
+            React.createElement("div", { style: S.hiitBtnRow },
+                React.createElement("button", { style: { ...S.dropBtn, padding: "18px 34px", fontSize: 18 }, onClick: () => { setSecs(el); setStage("count"); } }, "Done ✓"),
+                React.createElement("button", { style: S.hiitCtl, onClick: onClose }, "Cancel"))));
+    }
+    if (stage === "count") {
+        const bump = (d) => setReps((r) => Math.max(0, Math.min(200, r + d)));
+        return (React.createElement("div", { style: { ...S.hiitOverlay, background: C.iron2 } },
+            React.createElement("div", { style: S.hiitPhase }, "How many clean reps?"),
+            React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 14, marginTop: 10 } },
+                React.createElement("button", { style: S.finDial, onClick: () => bump(-1) }, "−"),
+                React.createElement("input", { style: { ...S.hiitBig, width: 170, background: "none", border: "none", textAlign: "center", outline: "none", padding: 0 }, inputMode: "numeric", value: reps || "", placeholder: "0", onChange: (e) => setReps(Math.max(0, Math.min(200, parseInt(e.target.value) || 0))) }),
+                React.createElement("button", { style: S.finDial, onClick: () => bump(1) }, "+")),
+            React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 6 } }, [-5, 5, 10].map((d) => React.createElement("button", { key: d, style: S.presetChip, onClick: () => bump(d) }, (d > 0 ? "+" : "") + d))),
+            React.createElement("div", { style: { ...S.hiitRound, marginTop: 10 } }, mmss(secs) + " under the bar"),
+            React.createElement("div", { style: S.hiitBtnRow },
+                React.createElement("button", { style: { ...S.dropBtn, padding: "16px 30px", opacity: reps > 0 ? 1 : 0.4 }, onClick: () => { if (reps > 0) { setRes(onComplete(reps)); setStage("reveal"); } } }, "Lock it in ⚒"),
+                React.createElement("button", { style: S.hiitCtl, onClick: onClose }, "Cancel"))));
+    }
+    // reveal
+    const done = shown >= res.reps;
+    const head = res.first ? (res.level > 1 ? "Level " + res.level + " — the bar is set" : "The bar is set")
+        : res.record ? "+" + (res.reps - res.best) + " over your record 🔥"
+            : res.matched ? "Matched your record"
+                : (res.best - res.reps) + " short of your record — next time";
+    const hot = res.record || res.leveled || res.first;
+    const shareText = "IRONLOG ⚒ Finisher — " + res.name + "\n" + res.reps + " reps to failure @ " + wShow + " " + unit +
+        (res.tier ? "\n" + res.tier.icon + " " + res.tier.label + " tier" : "") + (res.record ? "\nNew record (+" + (res.reps - res.best) + ")" : "") + (res.leveled ? "\nFORGED — levelling up" : "");
+    return (React.createElement("div", { style: { ...S.hiitOverlay, background: hot ? "#2a1405" : C.iron2, overflowY: "auto", padding: "24px 16px" } },
+        React.createElement("div", { style: S.hiitPhase }, "⚒ Finisher"),
+        React.createElement("div", { style: { ...S.hiitBig, color: done && hot ? C.forge : "#fff", animation: done && hot ? "flare 0.9s ease" : "none" } }, shown),
+        React.createElement("div", { style: S.hiitRound }, "reps @ " + wShow + " " + unit),
+        done && React.createElement("div", { style: { ...S.finHead, color: hot ? C.forge : C.chalk } }, head),
+        done && React.createElement("div", { style: S.finLadder }, FIN_TIERS.map((t) => {
+            const got = res.reps >= t.n;
+            const isNew = got && (!res.best || res.best < t.n);
+            return React.createElement("div", { key: t.n, style: { ...S.finRung, ...(got ? S.finRungOn : {}), ...(isNew ? { animation: "flare 0.9s ease" } : {}) } },
+                React.createElement("div", { style: { fontSize: 18 } }, t.icon),
+                React.createElement("div", { style: S.finRungL }, t.label),
+                React.createElement("div", { style: S.finRungN }, t.n + "+"));
+        })),
+        done && res.tierUp && !res.first && React.createElement("div", { style: S.finTarget }, "New tier: " + res.tier.icon + " " + res.tier.label),
+        done && res.last != null && !res.first && React.createElement("div", { style: { ...S.hiitRound, marginTop: 6 } }, "Last time " + res.last + " · record was " + res.best),
+        done && !res.leveled && !res.tier && React.createElement("div", { style: { ...S.hiitRound, marginTop: 6 } }, (10 - res.reps) + " more for Iron"),
+        done && !res.leveled && res.tier && res.tier.n < FIN_FORGED && React.createElement("div", { style: { ...S.hiitRound, marginTop: 6 } }, (FIN_TIERS.find((t) => t.n > res.reps).n - res.reps) + " more for the next tier"),
+        done && res.leveled && React.createElement("div", { style: { ...S.finCard, marginTop: 14, textAlign: "center", maxWidth: 320 } },
+            React.createElement("div", { style: S.finEye }, "⚒ FORGED — Level " + res.nextLevel),
+            React.createElement("div", { style: S.finSub }, "Next Finisher: " + fmt(inUnit({ weight: res.nextW, unit: res.unit }, unit)) + " " + unit + ". The chase starts again.")),
+        done && res.record && React.createElement("div", { style: { ...S.hiitRound, marginTop: 8, color: C.forge } }, "Forge-drop chance doubled this session"),
+        done && React.createElement("div", { style: { ...S.hiitBtnRow, marginTop: 22 } },
+            React.createElement("button", { style: S.dropBtn, onClick: () => tryShare(shareText, setHint) }, "Share ↗"),
+            React.createElement("button", { style: S.hiitCtl, onClick: onClose }, "Done")),
+        hint ? React.createElement("div", { style: { ...S.shareHint, marginTop: 8 } }, hint) : null));
+}
+function FinisherBoard({ data, unit, founder, onGate, onToggle }) {
+    if (!founder)
+        return React.createElement(FounderLock, { title: FINISHER_GATE.title, blurb: FINISHER_GATE.blurb, onOpen: () => onGate && onGate(FINISHER_GATE) });
+    const rows = Object.entries(data.finishers || {}).map(([id, r]) => ({ id, ...r, top: Math.max(r.best || 0, ...(r.hist || []).filter((h) => (h.lvl || 1) === (r.level || 1)).map((h) => h.r)) }))
+        .sort((a, b) => (b.level || 1) - (a.level || 1) || b.top - a.top);
+    return (React.createElement(React.Fragment, null,
+        React.createElement("div", { style: S.cabSect },
+            "⚒ Finisher board ",
+            React.createElement("button", { style: { ...S.typeOpt, ...(data.finisherOff ? {} : S.typeOptOn) }, onClick: onToggle }, data.finisherOff ? "Prompts off" : "Prompts on")),
+        rows.length === 0
+            ? React.createElement("div", { style: S.quietWeek }, "Finish a lift’s working sets and take the challenge — your records land here.")
+            : React.createElement("div", { style: S.prBoard }, rows.map((r) => {
+                const t = finTier(r.top);
+                return React.createElement("div", { key: r.id, style: S.prBoardRow },
+                    React.createElement("span", { style: { ...S.prRankNum, width: 34 } }, "L" + (r.level || 1)),
+                    React.createElement("span", { style: S.prBoardName }, r.name),
+                    React.createElement("span", { style: { ...S.pctChip, color: C.forge, background: "rgba(242,162,60,0.1)", borderColor: C.forgeDeep } }, fmt(inUnit({ weight: r.w, unit: r.unit }, unit)) + " " + unit),
+                    React.createElement("span", { style: S.prBoardVal }, (r.top || 0) + " " + (t ? t.icon : "")));
+            }))));
+}
 function ProgressView({ data, unit, progId, setProgId, onSetInjury, founder, onGate }) {
+    const [metric, setMetric] = useState("e1rm"); // e1rm | vol
     // exercises that have any history
     const logged = (() => {
         const ids = [];
@@ -1943,12 +2178,13 @@ function ProgressView({ data, unit, progId, setProgId, onSetInjury, founder, onG
             const ex = data.workouts[d].exercises.find((e) => e.id === current);
             if (!ex)
                 continue;
-            const done = ex.sets.filter((s) => (s.done || s.weight > 0) && !s.warmup);
+            const done = ex.sets.filter((s) => (s.done || s.weight > 0) && !s.warmup && !s.finisher);
             if (!done.length)
                 continue;
             const best1rm = Math.max(...done.map((s) => e1rm(s, unit)));
             const topSet = done.reduce((a, b) => (inUnit(b, unit) > inUnit(a, unit) ? b : a));
-            pts.push({ date: d, value: best1rm, top: topSet });
+            const vol = ex.sets.filter((s) => isWorkDone(s)).reduce((a, s) => a + inUnit(s, unit) * (s.reps || 0) * sideMult(s), 0);
+            pts.push({ date: d, value: best1rm, top: topSet, vol });
         }
         return pts;
     })();
@@ -1957,11 +2193,14 @@ function ProgressView({ data, unit, progId, setProgId, onSetInjury, founder, onG
             React.createElement("div", { style: S.emptyMark }, "\u2197"),
             React.createElement("div", { style: S.emptyTitle }, "No history yet"),
             React.createElement("div", { style: S.emptySub }, "Log a few sessions and your strength curve shows up here.")));
-    const pr = points.length ? Math.max(...points.map((p) => p.value)) : 0;
-    const latest = points.length ? points[points.length - 1].value : 0;
+    const show = metric === "vol" ? points.map((p) => ({ ...p, value: p.vol })) : points;
+    const pr = show.length ? Math.max(...show.map((p) => p.value)) : 0;
+    const latest = show.length ? show[show.length - 1].value : 0;
     return (React.createElement("div", null,
         React.createElement(RecoveryHeatmap, { data: data, today: localISO(new Date()), onSetInjury: onSetInjury }),
-        React.createElement("div", { style: S.eyebrow }, "Estimated 1-rep max"),
+        React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between" } },
+            React.createElement("div", { style: S.eyebrow }, metric === "vol" ? "Session volume" : "Estimated 1-rep max"),
+            React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 4 } }, [["e1rm", "\u25CE 1RM"], ["vol", "\u224B Volume"]].map(([k, l]) => React.createElement("button", { key: k, style: { ...S.typeOpt, ...(metric === k ? S.typeOptOn : {}) }, onClick: () => setMetric(k) }, l)))),
         React.createElement("select", { style: S.select, value: current, onChange: (e) => setProgId(e.target.value) }, logged.map((l) => (React.createElement("option", { key: l.id, value: l.id }, l.name)))),
         points.length === 0 ? (React.createElement("div", { style: S.empty },
             React.createElement("div", { style: S.emptySub }, "No completed sets recorded for this lift yet."))) : (React.createElement(React.Fragment, null,
@@ -1970,18 +2209,18 @@ function ProgressView({ data, unit, progId, setProgId, onSetInjury, founder, onG
                     React.createElement("div", { style: S.statBig },
                         fmt(latest),
                         React.createElement("span", { style: S.statUnit }, unit)),
-                    React.createElement("div", { style: S.statSub }, "latest est. 1RM")),
+                    React.createElement("div", { style: S.statSub }, metric === "vol" ? "latest session volume" : "latest est. 1RM")),
                 React.createElement("div", { style: { textAlign: "right" } },
                     React.createElement("div", { style: { ...S.statBig, color: C.forge } },
                         fmt(pr),
                         React.createElement("span", { style: S.statUnit }, unit)),
                     React.createElement("div", { style: S.statSub }, "best ever"))),
-            React.createElement(Chart, { points: points, unit: unit, pr: pr }),
+            React.createElement(Chart, { points: show, unit: unit, pr: pr }),
             founder
                 ? React.createElement(LiftAnalytics, { data: data, exId: current, unit: unit, today: localISO(new Date()) })
                 : React.createElement(FounderLock, { title: ANALYTICS_GATE.title, blurb: ANALYTICS_GATE.blurb, onOpen: () => onGate(ANALYTICS_GATE) }),
             React.createElement("div", { style: S.eyebrow }, "Sessions"),
-            points.slice().reverse().map((p) => (React.createElement("div", { key: p.date, style: S.histRow },
+            show.slice().reverse().map((p) => (React.createElement("div", { key: p.date, style: S.histRow },
                 React.createElement("span", { style: S.histDate }, shortDate(p.date)),
                 React.createElement("span", { style: S.histTop },
                     fmt(inUnit(p.top, unit)),
@@ -2190,7 +2429,9 @@ const CARDIO_LIB = [
 ];
 const DIST_UNIT = { kg: "km", lb: "mi" };
 const KM2MI = 0.621371;
-const distDisp = (km, unit) => r1(unit === "kg" ? km : km * KM2MI);
+// Distance shows to 2 decimals (10 m / 0.01 mi). Stored km is never rounded.
+const r2 = (n) => Math.round(n * 100) / 100;
+const distDisp = (km, unit) => r2(unit === "kg" ? km : km * KM2MI);
 const distStore = (v, unit) => Math.max(0, unit === "kg" ? v : v / KM2MI);
 const paceStr = (minutes, km, unit) => {
     const d = unit === "kg" ? km : km * KM2MI;
@@ -2228,7 +2469,7 @@ function equivalent(volKg) {
 function computePRs(data, unit, beforeIso, targetDates) {
     const prior = {};
     Object.keys(data.workouts).filter((d) => d < beforeIso).forEach((d) => data.workouts[d].exercises.forEach((ex) => ex.sets.forEach((s) => {
-        if (isWorkDone(s)) {
+        if (isWorkDone(s) && !s.finisher) {
             const v = e1rm(s, unit);
             if (v > (prior[ex.id] || 0))
                 prior[ex.id] = v;
@@ -2236,7 +2477,7 @@ function computePRs(data, unit, beforeIso, targetDates) {
     })));
     const best = {}, names = {};
     targetDates.filter((d) => data.workouts[d]).forEach((d) => data.workouts[d].exercises.forEach((ex) => ex.sets.forEach((s) => {
-        if (isWorkDone(s)) {
+        if (isWorkDone(s) && !s.finisher) {
             const v = e1rm(s, unit);
             if (v > (best[ex.id] || 0)) {
                 best[ex.id] = v;
@@ -2375,72 +2616,99 @@ const OVERLOAD_WINDOWS = {
     Legs: [5, 8], Olympic: [5, 8],
     Chest: [6, 10], Back: [6, 10], Shoulders: [6, 10],
 };
-function overloadFor(data, exId, category, beforeDate, unit) {
+// Volume-focus rep windows: compounds 10–15, upper compounds 12–15, isolation 15–20.
+const VOLUME_WINDOWS = {
+    Legs: [10, 15], Olympic: [10, 15],
+    Chest: [12, 15], Back: [12, 15], Shoulders: [12, 15],
+};
+const repWindow = (category, focus) => focus === "volume"
+    ? (VOLUME_WINDOWS[category] || [15, 20])
+    : (OVERLOAD_WINDOWS[category] || [8, 12]);
+// Which focus a past logged exercise was done under: explicit per-lift override,
+// else that day's check-in focus, else inferred (12+ reps at the top weight = volume).
+// Inference keeps pre-feature history usable without any migration.
+function sessionFocus(data, d, e, minRepsAtTop) {
+    if (e.focus)
+        return e.focus;
+    const pre = ((data.checkins || {})[d] || {}).pre;
+    if (pre && pre.focus)
+        return pre.focus;
+    return minRepsAtTop >= 12 ? "volume" : "strength";
+}
+function overloadFor(data, exId, category, beforeDate, unit, focus) {
     var _a, _b, _c;
-    // Model 2 — recency-weighted e1RM. Anchor the concrete weight/reps to the
-    // most recent session (what you actually last handled), but read a
-    // recency-weighted estimated-1RM trend across the last 3 sessions to decide
-    // whether to push, hold, or back off. Today's compulsory readiness check-in
-    // then gates it into three bands. Degrades to single-session behaviour when
-    // only one session exists in the window.
+    focus = focus === "volume" ? "volume" : "strength";
+    // Model 2 — recency-weighted e1RM, now focus-aware. Only sessions done under the
+    // SAME focus feed the trend, so a light volume day never reads as a strength dip
+    // (and vice versa). Concrete weight/reps anchor to the most recent same-focus
+    // session; readiness gates it into three bands. Degrades to single-session logic.
     const cutoff = addDaysISO(beforeDate, -21);
-    const dates = Object.keys(data.workouts).filter((d) => d < beforeDate && d >= cutoff).sort().reverse();
+    const crossCutoff = addDaysISO(beforeDate, -60);
+    const dates = Object.keys(data.workouts).filter((d) => d < beforeDate && d >= crossCutoff).sort().reverse();
     const sess = [];
+    let other = null; // most recent opposite-focus session — seeds a first session in a new focus
     for (const d of dates) {
-        const e = data.workouts[d].exercises.find((x) => x.id === exId && x.sets.some((s) => s.done && !s.warmup && (s.reps || 0) > 0));
+        const e = data.workouts[d].exercises.find((x) => x.id === exId && x.sets.some((s) => s.done && !s.warmup && !s.finisher && (s.reps || 0) > 0));
         if (!e) continue;
-        const work = e.sets.filter((s) => s.done && !s.warmup && (s.reps || 0) > 0);
+        const work = e.sets.filter((s) => s.done && !s.warmup && !s.finisher && (s.reps || 0) > 0);
         const topW = Math.max(...work.map((s) => inUnit(s, unit)));
         if (topW <= 0) continue; // bodyweight-style logging carries no load target
         const atTop = work.filter((s) => inUnit(s, unit) === topW);
         const minReps = Math.min(...atTop.map((s) => s.reps || 0));
-        const e1 = Math.max(...work.map((s) => e1rm(s, unit))); // best est-1RM that day
+        const e1 = Math.max(...work.map((s) => e1rm(s, unit)));
+        if (sessionFocus(data, d, e, minReps) !== focus) {
+            if (!other) other = { date: d, e1 };
+            continue;
+        }
+        if (d < cutoff) continue;
         sess.push({ date: d, topW, minReps, e1 });
         if (sess.length >= 3) break;
     }
-    if (!sess.length)
-        return null;
-    const [lo, hi] = OVERLOAD_WINDOWS[category] || [8, 12];
+    const [lo, hi] = repWindow(category, focus);
     const step = STEP[unit];
-    const ref = sess[0]; // most recent — the concrete anchor
+    const ci = data.checkins || {};
+    const readiness = readinessScore((_c = ci[beforeDate]) === null || _c === void 0 ? void 0 : _c.pre);
+    const band = readiness == null ? null : readiness >= 70 ? "primed" : readiness >= 40 ? "steady" : "low";
+    if (!sess.length) {
+        if (!other) return null;
+        // First session in this focus: back out a working weight for the bottom of the
+        // new window from recent capability (Epley inverted), with a 5% margin (15% if low).
+        const margin = band === "low" ? 0.85 : 0.95;
+        const w = Math.floor(((other.e1 / (1 + lo / 30)) * margin) / step) * step;
+        if (w <= 0) return null;
+        return { mode: "start", weight: r1(w), reps: lo, hi, prevW: null, prevR: null, trend: "flat", focus,
+            why: focus === "volume" ? "from your strength work" : "from your volume work" };
+    }
+    const ref = sess[0];
     const base = ref.topW;
-    // Recency-weighted mean e1RM: newest 3x, then 2x, then 1x.
     const WT = [3, 2, 1];
     let wsum = 0, esum = 0;
     sess.forEach((s, i) => { wsum += WT[i]; esum += WT[i] * s.e1; });
     const smoothE = esum / wsum;
-    // Trend = is the latest session above/below recent weighted capability?
     let trend = "flat";
     if (sess.length >= 2) {
         if (ref.e1 > smoothE * 1.02) trend = "up";
         else if (ref.e1 < smoothE * 0.98) trend = "down";
     }
-    // Autoregulation inputs
-    const ci = data.checkins || {};
     const refRpe = ((_b = (_a = ci[ref.date]) === null || _a === void 0 ? void 0 : _a.post) === null || _b === void 0 ? void 0 : _b.rpe) || null;
-    const readiness = readinessScore((_c = ci[beforeDate]) === null || _c === void 0 ? void 0 : _c.pre);
-    const band = readiness == null ? null : readiness >= 70 ? "primed" : readiness >= 40 ? "steady" : "low";
     const brutal = refRpe !== null && refRpe >= 9;
     const easy = refRpe !== null && refRpe <= 5;
     const earnedStep = ref.minReps >= hi || (easy && ref.minReps >= hi - 1);
-    // LOW readiness -> recover: hold weight, match (not beat) reps. No PB of any kind.
     if (band === "low") {
-        return { mode: "recover", weight: r1(base), reps: Math.min(hi, ref.minReps), hi, prevW: base, prevR: ref.minReps, trend, why: "low readiness" };
+        return { mode: "recover", weight: r1(base), reps: Math.min(hi, ref.minReps), hi, prevW: base, prevR: ref.minReps, trend, focus, why: "low readiness" };
     }
     if (earnedStep) {
-        // Take the weight step only when trend isn't down, last set wasn't brutal, and today is primed.
         const canStep = trend !== "down" && !brutal && band === "primed";
         if (canStep) {
             const inc = Math.max(step, Math.ceil((base * 0.025) / step) * step);
-            return { mode: "load", weight: r1(base + inc), reps: lo, hi, prevW: base, prevR: ref.minReps, trend,
+            return { mode: "load", weight: r1(base + inc), reps: lo, hi, prevW: base, prevR: ref.minReps, trend, focus,
                 why: trend === "up" ? "trend up" : (easy && ref.minReps < hi ? "last one was easy" : null) };
         }
-        return { mode: "hold", weight: r1(base), reps: hi, hi, prevW: base, prevR: ref.minReps, trend,
+        return { mode: "hold", weight: r1(base), reps: hi, hi, prevW: base, prevR: ref.minReps, trend, focus,
             why: brutal ? "hard last set" : trend === "down" ? "trend dipping" : "steady day" };
     }
-    return { mode: "reps", weight: r1(base), reps: Math.min(hi, ref.minReps + 1), hi, prevW: base, prevR: ref.minReps, trend, why: null };
+    return { mode: "reps", weight: r1(base), reps: Math.min(hi, ref.minReps + 1), hi, prevW: base, prevR: ref.minReps, trend, focus, why: null };
 }
-
 
 // ---- Plate calculator (free) + warm-up generator (Founder) ----
 // Standard barbell lifts only — machines, dumbbells and Smith bars have no fixed bar weight.
@@ -2489,17 +2757,17 @@ function warmupSets(W, unit, barbell) {
     return out;
 }
 // Per-lift analytics (Founder). Pure: everything derives from the log.
-const REP_PR_RANGES = [1, 3, 5, 8, 10, 12];
+const REP_PR_RANGES = [1, 3, 5, 8, 10, 12, 15, 20];
 function liftAnalytics(data, exId, unit, today) {
     const dates = Object.keys(data.workouts).sort().filter((d) => d <= today);
     const repBest = {};
     REP_PR_RANGES.forEach((r) => { repBest[r] = null; });
-    let best = null, totalVol = 0, totalReps = 0, sessions = 0;
+    let best = null, totalVol = 0, totalReps = 0, sessions = 0, bestSess = null;
     let runBest = 0, runTopW = 0, lastPR = null, firstDate = null;
     const sessBest = []; // [{date, e1}]
     for (const d of dates) {
         const ex = (data.workouts[d].exercises || []).filter((e) => e.id === exId);
-        let dayBest = 0, dayTopW = 0, worked = false;
+        let dayBest = 0, dayTopW = 0, worked = false, dayVol = 0;
         ex.forEach((e) => e.sets.forEach((st) => {
             if (!isWorkDone(st) || (st.reps || 0) <= 0)
                 return;
@@ -2509,7 +2777,10 @@ function liftAnalytics(data, exId, unit, today) {
             worked = true;
             const m = sideMult(st);
             totalVol += w * st.reps * m;
+            dayVol += w * st.reps * m;
             totalReps += st.reps * m;
+            if (st.finisher)
+                return; // counts as work, never as a strength record
             if (w > dayTopW)
                 dayTopW = w;
             const e1 = e1rm(st, unit);
@@ -2525,6 +2796,8 @@ function liftAnalytics(data, exId, unit, today) {
         if (!worked)
             continue;
         sessions++;
+        if (!bestSess || dayVol > bestSess.vol)
+            bestSess = { vol: dayVol, date: d };
         sessBest.push({ date: d, e1: dayBest });
         // A PR = new heaviest weight OR new est. 1RM — same rule as the in-session 🏆 pop.
         if (firstDate === null) {
@@ -2569,9 +2842,61 @@ function liftAnalytics(data, exId, unit, today) {
     });
     const change = recent > 0 && prior > 0 ? Math.round(((recent - prior) / prior) * 1000) / 10 : null;
     return {
-        sessions, totalVol, totalReps, best, repBest, weeks, change,
+        sessions, totalVol, totalReps, best, bestSess, repBest, weeks, change,
         lastPR, daysSincePR: lastPR ? dayDiff(lastPR, today) : null, firstDate,
     };
+}
+
+// ---- The Finisher (Founder): one optional rep-to-failure set at a fixed weight per lift ----
+const FIN_TIERS = [
+    { n: 10, label: "Iron", icon: "⚙️" },
+    { n: 15, label: "Bronze", icon: "🥉" },
+    { n: 20, label: "Silver", icon: "🥈" },
+    { n: 25, label: "Gold", icon: "🥇" },
+    { n: 30, label: "Forged", icon: "⚒" },
+];
+const FIN_FORGED = 30; // reaching Forged levels the lift up one plate step
+const finTier = (r) => { let t = null; FIN_TIERS.forEach((x) => { if ((r || 0) >= x.n) t = x; }); return t; };
+// No barbell bench/squat/dead/OHP/Olympic to failure without a spotter. Machines,
+// cables, dumbbells and Smith (has safeties) are fair game.
+const finisherEligible = (ex) => !BARBELL_IDS.has(ex.id) && ex.category !== "HIIT" && ex.category !== "Olympic" && !ex.timed;
+// Fixed weight per lift: locked at the first attempt to ~50% of best est. 1RM, then only
+// moves when the lifter levels up. That is what makes records comparable.
+function finisherTarget(data, ex, unit) {
+    if (!finisherEligible(ex))
+        return null;
+    const rec = (data.finishers || {})[ex.id];
+    if (rec)
+        return { w: rec.w, unit: rec.unit, rec };
+    let best = 0;
+    Object.keys(data.workouts).forEach((d) => (data.workouts[d].exercises || []).forEach((e) => {
+        if (e.id !== ex.id)
+            return;
+        e.sets.forEach((s) => {
+            if (!isWorkDone(s) || s.finisher || (s.reps || 0) <= 0)
+                return;
+            const v = e1rm(s, unit);
+            if (v > best)
+                best = v;
+        });
+    }));
+    const step = STEP[unit];
+    const w = Math.floor((best * 0.5) / step) * step;
+    return w > 0 ? { w: r1(w), unit, rec: null } : null;
+}
+// Pure: given the prior record and today's reps, what happened?
+function finisherOutcome(prev, reps, w, unit, name) {
+    const best = prev ? prev.best || 0 : 0;
+    const last = prev ? (prev.last == null ? null : prev.last) : null;
+    const level = prev ? prev.level || 1 : 1;
+    const first = !prev || !best;
+    const record = !first && reps > best;
+    const matched = !first && reps === best;
+    const tier = finTier(reps), prevTier = finTier(best);
+    const tierUp = !!tier && (!prevTier || tier.n > prevTier.n);
+    const leveled = reps >= FIN_FORGED;
+    const nextW = leveled ? r1(w + STEP[unit]) : w;
+    return { reps, best, last, level, first, record, matched, tier, tierUp, leveled, nextLevel: leveled ? level + 1 : level, nextW, w, unit, name };
 }
 // CD6 — scarcity. One limited-edition badge per calendar month. Earn it inside
 // the month or it is gone for good — the cabinet keeps the gap.
@@ -2733,7 +3058,7 @@ function forgeStats(data, uptoIso) {
             totalReps += reps;
             if (ex.category === "Arms")
                 armReps += reps;
-            const v = e1rm(s, "kg");
+            const v = s.finisher ? 0 : e1rm(s, "kg");
             if (v > (dayBest[ex.id] || 0))
                 dayBest[ex.id] = v;
         }));
@@ -3443,7 +3768,7 @@ function FounderCard({ founder, onBuy, onRedeem, price }) {
                 err && React.createElement("div", { style: { color: C.red, fontFamily: cond, fontSize: 12, marginTop: 6, textAlign: "center", letterSpacing: 0.5 } }, "That code didn\u2019t match \u2014 try again.")))
             : React.createElement("button", { style: S.founderCodeLink, onClick: () => setShowCode(true) }, "Already backed it? Enter your code")));
 }
-function CabinetView({ data, unit, today, onSetBodyweight, onImport, onBackedUp, founder, onBuyFounder, onRedeemFounder }) {
+function CabinetView({ data, unit, today, onSetBodyweight, onImport, onBackedUp, founder, onBuyFounder, onRedeemFounder, onGate, onToggleFinisher }) {
     const fs = forgeStats(data, null);
     if (fs.sessions === 0)
         return (React.createElement("div", null,
@@ -3549,6 +3874,7 @@ function CabinetView({ data, unit, today, onSetBodyweight, onImport, onBackedUp,
                         unit))),
             bwKg > 0 && board.some(b => strengthPct(b.id, b.best, bwKg) !== null) && (React.createElement("div", { style: S.pctDisclaimer }, "Percentiles are estimates vs. the adult male population (incl. non-lifters), based on bodyweight-ratio strength standards.")),
             !bwSet && board.some(b => EX_CURVE_MAP[b.id]) && (React.createElement("div", { style: S.pctDisclaimer }, "Set your bodyweight above to see how your lifts compare to the adult male population.")))),
+        React.createElement(FinisherBoard, { data: data, unit: unit, founder: founder, onGate: onGate, onToggle: onToggleFinisher }),
         React.createElement(BackupPanel, { data: data, onImport: onImport, onBackedUp: onBackedUp }),
         React.createElement(FounderCard, { founder: founder, onBuy: onBuyFounder, onRedeem: onRedeemFounder, price: FOUNDER.price }),
         React.createElement("a", { href: "https://buymeacoffee.com/ironlogapp", target: "_blank", rel: "noopener noreferrer", style: S.coffeeBtn }, "\u2615 Enjoying IRONLOG? Shout the smith a coffee"),
@@ -4039,6 +4365,21 @@ Object.assign(S, {
     founderTitle: { fontFamily: cond, fontWeight: 700, fontSize: 18, letterSpacing: 1, textTransform: "uppercase", color: C.chalk, marginTop: 4 },
     founderLore: { fontFamily: body, fontSize: 12.5, color: C.dim, lineHeight: 1.55, margin: "8px 4px 14px" },
     founderBuy: { width: "100%", background: C.forge, color: C.iron, border: "none", borderRadius: 11, padding: "13px", fontFamily: cond, fontWeight: 700, fontSize: 15, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" },
+    finCard: { marginTop: 12, background: "linear-gradient(180deg, rgba(242,162,60,0.14), rgba(242,162,60,0.03))", border: `1.5px solid ${C.forge}`, borderRadius: 12, padding: "12px 14px" },
+    finEye: { fontFamily: cond, fontWeight: 700, fontSize: 12, letterSpacing: 1.5, textTransform: "uppercase", color: C.forge },
+    finBig: { fontFamily: mono, fontWeight: 700, fontSize: 18, color: C.chalk, marginTop: 4 },
+    finSub: { fontFamily: body, fontSize: 12.5, color: C.dim, marginTop: 4, lineHeight: 1.45 },
+    finGo: { background: C.forge, color: "#1a1206", border: "none", borderRadius: 10, padding: "11px", fontFamily: cond, fontWeight: 700, fontSize: 14, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" },
+    finSkip: { background: "none", border: `1px solid ${C.lineSoft}`, color: C.faint, borderRadius: 10, padding: "11px", fontFamily: cond, fontWeight: 700, fontSize: 13, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" },
+    finDone: { marginTop: 10, border: `1px dashed ${C.forgeDeep}`, color: C.forge, borderRadius: 10, padding: "8px 12px", fontFamily: cond, fontWeight: 700, fontSize: 13, letterSpacing: 0.5 },
+    finTarget: { fontFamily: cond, fontWeight: 700, fontSize: 15, letterSpacing: 1, textTransform: "uppercase", color: C.forge, border: `1px solid ${C.forgeDeep}`, borderRadius: 20, padding: "6px 14px", marginTop: 10 },
+    finHead: { fontFamily: cond, fontWeight: 700, fontSize: 22, letterSpacing: 0.5, marginTop: 14, textAlign: "center" },
+    finDial: { width: 56, height: 56, borderRadius: 28, background: "rgba(255,255,255,0.06)", border: "1.5px solid rgba(255,255,255,0.3)", color: "#fff", fontSize: 26, cursor: "pointer" },
+    finLadder: { display: "flex", gap: 6, marginTop: 16, width: "100%", maxWidth: 360 },
+    finRung: { flex: 1, textAlign: "center", border: `1px solid ${C.lineSoft}`, borderRadius: 10, padding: "8px 2px", opacity: 0.35 },
+    finRungOn: { opacity: 1, borderColor: C.forge, background: "rgba(242,162,60,0.12)" },
+    finRungL: { fontFamily: cond, fontWeight: 700, fontSize: 11, letterSpacing: 0.8, textTransform: "uppercase", color: C.chalk, marginTop: 2 },
+    finRungN: { fontFamily: mono, fontSize: 10, color: C.faint },
     lockCard: { width: "100%", textAlign: "left", margin: "0 0 22px", background: "linear-gradient(180deg, rgba(242,162,60,0.08), rgba(242,162,60,0.02))", border: `1.5px dashed ${C.forgeDeep}`, borderRadius: 14, padding: "14px 16px", cursor: "pointer" },
     lockTag: { fontFamily: cond, fontWeight: 700, fontSize: 11, letterSpacing: 1.5, textTransform: "uppercase", color: C.forge },
     lockTitle: { fontFamily: cond, fontWeight: 700, fontSize: 18, color: C.chalk, marginTop: 4, letterSpacing: 0.4 },
@@ -4050,7 +4391,7 @@ Object.assign(S, {
     anStatBig: { fontFamily: mono, fontWeight: 700, fontSize: 19, color: C.chalk, lineHeight: 1 },
     anStatLab: { fontFamily: cond, fontSize: 9.5, letterSpacing: 0.8, textTransform: "uppercase", color: C.faint, marginTop: 5 },
     anSub: { fontFamily: cond, fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase", color: C.faint, marginBottom: 8 },
-    anRepGrid: { display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 5 },
+    anRepGrid: { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 5 },
     anRepCell: { background: C.iron3, border: `1px solid ${C.lineSoft}`, borderRadius: 8, padding: "7px 2px", textAlign: "center" },
     anRepN: { fontFamily: cond, fontWeight: 700, fontSize: 11, color: C.forge, letterSpacing: 0.5 },
     anRepW: { fontFamily: mono, fontWeight: 700, fontSize: 13, color: C.chalk, marginTop: 3 },
@@ -4132,6 +4473,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 ::-webkit-scrollbar { width: 8px; }
 ::-webkit-scrollbar-thumb { background: ${C.line}; border-radius: 8px; }
 @keyframes rise { from { transform: translateY(20px); opacity: 0.6; } to { transform: translateY(0); opacity: 1; } }
+@keyframes flare { 0% { transform: scale(0.85); filter: brightness(1); } 45% { transform: scale(1.12); filter: brightness(1.6) drop-shadow(0 0 18px rgba(242,162,60,0.7)); } 100% { transform: scale(1); filter: brightness(1); } }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
