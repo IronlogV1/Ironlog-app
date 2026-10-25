@@ -50,7 +50,7 @@ const C = {
 const STEP = { kg: 2.5, lb: 5 };
 // Bump this whenever we ship. Shown in Cabinet so the live build is verifiable
 // at a glance — stale service-worker caches otherwise look identical.
-const BUILD = "2026.10.25";
+const BUILD = "2026.10.25b";
 // ---- Founder unlock (one-time supporter tier) ----
 // FILL THESE IN once your Stripe payment link is live:
 //  - url:   the Stripe Payment Link. Set its "after payment" redirect to
@@ -229,6 +229,7 @@ function IronLog() {
     const [workoutsOpen, setWorkoutsOpen] = useState(false);
     const [suggestOpen, setSuggestOpen] = useState(false);
     const [guideOpen, setGuideOpen] = useState(false);
+    const [gate, setGate] = useState(null); // { title, blurb } for a locked Founder feature
     const [dropReveal, setDropReveal] = useState(null); // relic id just dropped
     const [rest, setRest] = useState(null); // { seconds, total }
     const [progId, setProgId] = useState(null);
@@ -675,9 +676,10 @@ function IronLog() {
                 React.createElement(Tab, { active: view === "week", onClick: () => setView("week") }, "Week"),
                 React.createElement(Tab, { active: view === "progress", onClick: () => setView("progress") }, "Progress"),
                 React.createElement(Tab, { active: view === "cabinet", onClick: () => setView("cabinet") }, "Cabinet"))),
-        React.createElement("main", { style: S.main }, !loaded ? (React.createElement("div", { style: S.loading }, "Loading the rack\u2026")) : view === "log" ? (React.createElement(LogView, { dateLabel: headDate(logDate), exercises: logEx, todayExercises: todayEx, unit: unit, data: data, today: today, logDate: logDate, onChangeDate: setLogDate, dayTime: ((_c = data.workouts[logDate]) === null || _c === void 0 ? void 0 : _c.time) || "", onChangeTime: setDayTime, restMarked: restMarked, restKind: restKind, onRest: markRestDay, onUndoRest: clearRestDay, onAdd: () => setPickerOpen(true), onSetDone: handleSetDone, onRestPref: setRestPref, onLogBW: logBW, onLogCheckin: logCheckin, cardio: ((_d = data.workouts[logDate]) === null || _d === void 0 ? void 0 : _d.cardio) || [], onAddCardio: () => setCardioOpen(true), updateCardio: updateCardio, removeCardio: removeCardio, onOpenWorkouts: () => setWorkoutsOpen(true), onSuggest: () => setSuggestOpen(true), hasTemplates: (data.templates || []).length > 0, updateEx: updateEx, removeEx: removeEx, startRest: (s) => setRest({ seconds: s, total: s }), onShare: finishSession, freezeAvail: freezeAvail, onFreeze: useFreeze, activeSession: ((data.workouts[logDate] || {}).activeSession) || 0, sessionFinished: ((data.workouts[logDate] || {}).finished) || {}, onStartAnother: startAnotherWorkout })) : view === "week" ? (React.createElement(WeekView, { data: data, unit: unit, today: today, onShareMonth: (m) => setShareMonth(m) })) : view === "cabinet" ? (React.createElement(CabinetView, { data: data, unit: unit, today: today, onSetBodyweight: setBodyweight, onImport: importData, onBackedUp: () => setData((p) => ({ ...p, lastBackup: Date.now() })), founder: data.founder, onBuyFounder: buyFounder, onRedeemFounder: redeemFounder })) : (React.createElement(ProgressView, { data: data, unit: unit, progId: progId, setProgId: setProgId, onSetInjury: setInjury }))),
+        React.createElement("main", { style: S.main }, !loaded ? (React.createElement("div", { style: S.loading }, "Loading the rack\u2026")) : view === "log" ? (React.createElement(LogView, { dateLabel: headDate(logDate), exercises: logEx, todayExercises: todayEx, unit: unit, data: data, today: today, logDate: logDate, onChangeDate: setLogDate, dayTime: ((_c = data.workouts[logDate]) === null || _c === void 0 ? void 0 : _c.time) || "", onChangeTime: setDayTime, restMarked: restMarked, restKind: restKind, onRest: markRestDay, onUndoRest: clearRestDay, onAdd: () => setPickerOpen(true), onSetDone: handleSetDone, onRestPref: setRestPref, onLogBW: logBW, onLogCheckin: logCheckin, cardio: ((_d = data.workouts[logDate]) === null || _d === void 0 ? void 0 : _d.cardio) || [], onAddCardio: () => setCardioOpen(true), updateCardio: updateCardio, removeCardio: removeCardio, onOpenWorkouts: () => setWorkoutsOpen(true), onSuggest: () => setSuggestOpen(true), hasTemplates: (data.templates || []).length > 0, updateEx: updateEx, removeEx: removeEx, startRest: (s) => setRest({ seconds: s, total: s }), onShare: finishSession, freezeAvail: freezeAvail, onFreeze: useFreeze, activeSession: ((data.workouts[logDate] || {}).activeSession) || 0, sessionFinished: ((data.workouts[logDate] || {}).finished) || {}, onStartAnother: startAnotherWorkout, founder: !!data.founder, onGate: setGate })) : view === "week" ? (React.createElement(WeekView, { data: data, unit: unit, today: today, onShareMonth: (m) => setShareMonth(m) })) : view === "cabinet" ? (React.createElement(CabinetView, { data: data, unit: unit, today: today, onSetBodyweight: setBodyweight, onImport: importData, onBackedUp: () => setData((p) => ({ ...p, lastBackup: Date.now() })), founder: data.founder, onBuyFounder: buyFounder, onRedeemFounder: redeemFounder })) : (React.createElement(ProgressView, { data: data, unit: unit, progId: progId, setProgId: setProgId, onSetInjury: setInjury, founder: !!data.founder, onGate: setGate }))),
         guideOpen && (React.createElement(GuideSheet, { onClose: () => setGuideOpen(false) })),
         loaded && view === "log" && !data.guideSeen && (React.createElement(GuidePrompt, { onOpen: openGuide, onDismiss: markGuideSeen })),
+        gate && (React.createElement(FounderGate, { gate: gate, price: FOUNDER.price, onBuy: () => { buyFounder(); }, onCode: () => { setGate(null); setView("cabinet"); }, onClose: () => setGate(null) })),
         founderWelcome && (React.createElement(FounderWelcome, { onClose: () => setFounderWelcome(false) })),
         coffeeAsk && (React.createElement(CoffeeAsk, { ask: coffeeAsk, onPick: (action) => { if (action === "never") markCoffeeAsk("never"); else markCoffeeAsk(coffeeAsk.key); setCoffeeAsk(null); } })),
         prPop && (React.createElement(PRPop, { pop: prPop, unit: unit, onClose: () => setPrPop(null) })),
@@ -708,7 +710,7 @@ function IronLog() {
         shareDay && (React.createElement(SessionShare, { data: data, unit: unit, dateIso: shareDay, saveState: saveState, lastSaved: lastSaved, storagePresent: storagePresent, onRetry: flushSave, onClose: () => { setShareDay(null); if (pendingCoffee) { setCoffeeAsk(pendingCoffee); setPendingCoffee(null); } } }))));
 }
 /* ---------------- Log view ---------------- */
-function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logDate, onChangeDate, dayTime, onChangeTime, restMarked, restKind, onRest, onUndoRest, onAdd, onSetDone, onRestPref, onLogBW, onLogCheckin, cardio, onAddCardio, updateCardio, removeCardio, onOpenWorkouts, onSuggest, hasTemplates, updateEx, removeEx, startRest, onShare, freezeAvail, onFreeze, activeSession, sessionFinished, onStartAnother }) {
+function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logDate, onChangeDate, dayTime, onChangeTime, restMarked, restKind, onRest, onUndoRest, onAdd, onSetDone, onRestPref, onLogBW, onLogCheckin, cardio, onAddCardio, updateCardio, removeCardio, onOpenWorkouts, onSuggest, hasTemplates, updateEx, removeEx, startRest, onShare, freezeAvail, onFreeze, activeSession, sessionFinished, onStartAnother, founder, onGate }) {
     const isWork = (s) => s.done && !s.warmup;
     const isBackdate = logDate !== today;
     const hasPreCheckin = !!(((data.checkins || {})[logDate]) || {}).pre;
@@ -758,7 +760,7 @@ function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logD
         }
         return React.createElement("div", { key: "s" + s, style: { marginBottom: fin ? 12 : 0 } },
             header,
-            exs.map((ex, exI) => React.createElement(ExerciseCard, { key: ex.uid, ex: ex, unit: unit, hasPrev: exI > 0, prevName: exI > 0 ? exs[exI - 1].name : null, rec: (ex.timed || !hasPreCheckin) ? null : overloadFor(data, ex.id, ex.category, logDate, unit), restSecs: restFor(data, ex), injured: !!(data.injuries || {})[ex.category], injuryNote: (((data.injuries || {})[ex.category]) || {}).note || "", onDone: (set) => onSetDone(ex, set, restFor(data, ex)), onRestPref: (secs) => onRestPref(ex.id, secs), update: (fn) => updateEx(ex.uid, fn), remove: () => removeEx(ex.uid) })),
+            exs.map((ex, exI) => React.createElement(ExerciseCard, { key: ex.uid, ex: ex, unit: unit, hasPrev: exI > 0, prevName: exI > 0 ? exs[exI - 1].name : null, rec: (ex.timed || !hasPreCheckin) ? null : overloadFor(data, ex.id, ex.category, logDate, unit), restSecs: restFor(data, ex), injured: !!(data.injuries || {})[ex.category], injuryNote: (((data.injuries || {})[ex.category]) || {}).note || "", onDone: (set) => onSetDone(ex, set, restFor(data, ex)), onRestPref: (secs) => onRestPref(ex.id, secs), update: (fn) => updateEx(ex.uid, fn), remove: () => removeEx(ex.uid), founder: founder, onGate: onGate })),
             cds.map((c) => React.createElement(CardioCard, { key: c.uid, c: c, unit: unit, last: cardioLastFor(data, c.id, logDate, unit), update: (fn) => updateCardio(c.uid, fn), remove: () => removeCardio(c.uid) })));
     }));
     return (React.createElement("div", null,
@@ -1450,7 +1452,30 @@ function CardioCard({ c, unit, last, update, remove }) {
                     React.createElement("input", { style: S.readout, inputMode: "numeric", value: c.level ? c.level : "", placeholder: "\u2013", onChange: (e) => setLvl(parseInt(e.target.value) || 0) }),
                     React.createElement("button", { style: S.stepBtn, onClick: () => setLvl((c.level || 0) + 1) }, "+")))))));
 }
-function ExerciseCard({ ex, unit, rec, restSecs, hasPrev, prevName, injured, injuryNote, onDone, onRestPref, update, remove }) {
+function ExerciseCard({ ex, unit, rec, restSecs, hasPrev, prevName, injured, injuryNote, onDone, onRestPref, update, remove, founder, onGate }) {
+    const barbell = BARBELL_IDS.has(ex.id);
+    const [wuMsg, setWuMsg] = useState(null);
+    const canWarm = !ex.timed && ex.category !== "HIIT" && ex.category !== "Core";
+    const addWarmups = () => {
+        if (!founder) {
+            onGate && onGate(WARMUP_GATE);
+            return;
+        }
+        // Target: today's prescription if unlocked, else the heaviest planned working set.
+        const planned = ex.sets.filter((s) => !s.warmup).map((s) => inUnit(s, unit));
+        const W = rec && rec.weight > 0 ? rec.weight : Math.max(0, ...planned);
+        const sets = warmupSets(W, unit, barbell);
+        if (!sets.length) {
+            setWuMsg(W > 0 ? "Too light to need a ramp — straight in." : "Set a working weight first.");
+            return;
+        }
+        setWuMsg(null);
+        update((e) => {
+            const side = e.unilateral ? "B" : null;
+            const fresh = sets.map((w) => ({ weight: w.weight, reps: w.reps, unit, done: false, warmup: true, side }));
+            e.sets = [...fresh, ...e.sets.filter((s) => !(s.warmup && !s.done))];
+        });
+    };
     const [active, setActive] = useState(ex.sets.length - 1);
     const [recApplied, setRecApplied] = useState(false);
     const [restOpen, setRestOpen] = useState(false);
@@ -1532,7 +1557,9 @@ function ExerciseCard({ ex, unit, rec, restSecs, hasPrev, prevName, injured, inj
                 "\u23F2 ",
                 mmss(restSecs)),
             React.createElement("button", { style: { ...S.uniToggle, ...(ex.timed ? S.uniToggleOn : {}) }, "aria-label": "Toggle time-based sets", onClick: toggleTimed }, "\u23F1 time"),
-            React.createElement("button", { style: { ...S.uniToggle, ...(uni ? S.uniToggleOn : {}) }, "aria-label": "Toggle per-side tracking", onClick: toggleUni }, "\u21C4 per side")),
+            React.createElement("button", { style: { ...S.uniToggle, ...(uni ? S.uniToggleOn : {}) }, "aria-label": "Toggle per-side tracking", onClick: toggleUni }, "\u21C4 per side"),
+            canWarm ? React.createElement("button", { style: { ...S.uniToggle, ...(founder ? {} : { opacity: 0.75 }) }, "aria-label": "Add warm-up sets", onClick: addWarmups }, founder ? "\uD83D\uDD25 warm-up" : "\u2692 warm-up") : null),
+        wuMsg ? React.createElement("div", { style: { ...S.ssTag, borderStyle: "solid" } }, wuMsg) : null,
         ex.ssWithPrev && hasPrev ? React.createElement("div", { style: S.ssTag }, "\u26D3 superset with " + prevName + " \u2014 no rest between") : null,
         rec && (recApplied ? (React.createElement("div", { style: S.recChipDone },
             "\uD83C\uDFAF Target: ",
@@ -1581,6 +1608,17 @@ function ExerciseCard({ ex, unit, rec, restSecs, hasPrev, prevName, injured, inj
                     React.createElement("button", { style: S.stepBtn, onClick: (e) => { e.stopPropagation(); setReps(i, (s.reps || 0) + 1); } }, "+")))),
                 React.createElement("button", { style: { ...S.check, ...(s.done ? S.checkOn : {}) }, "aria-label": "Complete set", onClick: (e) => { e.stopPropagation(); toggleDone(i); } }, "\u2713")),
             active === i && (React.createElement("div", { style: S.activeArea },
+                barbell && !ex.timed && (() => {
+                    const pl = platesFor(inUnit(s, unit), unit);
+                    if (!pl)
+                        return null;
+                    const counts = [];
+                    pl.plates.forEach((p) => { const c = counts.find((x) => x.p === p); if (c) c.n++; else counts.push({ p, n: 1 }); });
+                    return React.createElement("div", { style: S.typeRow },
+                        React.createElement("span", { style: S.plateLabel }, "plates / side"),
+                        React.createElement("span", { style: { fontFamily: mono, fontSize: 13, color: C.chalk } }, counts.map((c) => (c.n > 1 ? c.n + "\u00D7" : "") + fmt(c.p)).join(" + ") || "\u2014"),
+                        React.createElement("span", { style: { fontFamily: cond, fontSize: 11, color: C.faint, marginLeft: "auto", letterSpacing: 0.5 } }, pl.bar + " " + unit + " bar" + (pl.remainder > 0.01 ? " \u00B7 +" + fmt(pl.remainder) + " unloadable" : "")));
+                })(),
                 uni && (React.createElement("div", { style: S.typeRow },
                     React.createElement("span", { style: S.plateLabel }, "side"),
                     React.createElement("button", { style: { ...S.typeOpt, ...((s.side || "B") === "B" ? S.typeOptOn : {}) }, onClick: () => setSide(i, "B") }, "Both"),
@@ -1825,7 +1863,67 @@ function WorkoutsModal({ templates, lib, todayExercises, onStart, onSave, onDele
                         } } }, editId ? "Save changes" : "Save workout")))))));
 }
 /* ---------------- Progress view ---------------- */
-function ProgressView({ data, unit, progId, setProgId, onSetInjury }) {
+// ---- Founder gate: shown to non-Founders who tap a Founder feature ----
+function FounderGate({ gate, price, onBuy, onCode, onClose }) {
+    return (React.createElement("div", { style: { ...S.sheetBackdrop, zIndex: 52 }, onClick: onClose },
+        React.createElement("div", { style: { ...S.dropCard, textAlign: "center" }, onClick: (e) => e.stopPropagation() },
+            React.createElement("div", { style: S.dropEyebrow }, "⚒ Founders only"),
+            React.createElement("div", { style: { ...S.dropName, marginTop: 14 } }, gate.title),
+            React.createElement("div", { style: S.dropLore }, gate.blurb),
+            React.createElement("div", { style: { fontFamily: body, fontSize: 12, color: C.faint, marginBottom: 14, lineHeight: 1.5 } }, "IRONLOG stays free forever. Founders back the build once and unlock every new feature as it lands."),
+            React.createElement("button", { style: S.dropBtn, onClick: onBuy }, "⚒ Become a Founder — " + price),
+            React.createElement("button", { style: S.founderCodeLink, onClick: onCode }, "Already backed it? Enter your code"),
+            React.createElement("button", { style: { ...S.hiitCtlDark, width: "100%", marginTop: 6 }, onClick: onClose }, "Not now"))));
+}
+// Inline locked teaser card for Founder sections.
+function FounderLock({ title, blurb, onOpen }) {
+    return (React.createElement("button", { style: S.lockCard, onClick: onOpen },
+        React.createElement("div", { style: S.lockTag }, "⚒ Founders only"),
+        React.createElement("div", { style: S.lockTitle }, title),
+        React.createElement("div", { style: S.lockBlurb }, blurb),
+        React.createElement("div", { style: S.lockCta }, "Unlock →")));
+}
+const ANALYTICS_GATE = { title: "Deep lift analytics", blurb: "Rep-range PRs from 1 to 12 reps, your best-ever set, days since your last PR, an 8-week volume trend and your 4-week strength change — for every lift you log." };
+const WARMUP_GATE = { title: "Auto warm-ups", blurb: "One tap builds your ramp-up sets from today’s target — empty bar to 80% on barbell lifts — so you arrive at your working weight primed, not guessing." };
+function LiftAnalytics({ data, exId, unit, today }) {
+    const a = liftAnalytics(data, exId, unit, today);
+    if (!a.sessions)
+        return null;
+    const maxVol = Math.max(1, ...a.weeks.map((w) => w.vol));
+    const thisWeek = a.weeks[a.weeks.length - 1].vol;
+    const avgPrior = a.weeks.slice(0, -1).reduce((x, w) => x + w.vol, 0) / 7;
+    const statBox = (big, label, color) => React.createElement("div", { style: S.anStat },
+        React.createElement("div", { style: { ...S.anStatBig, ...(color ? { color } : {}) } }, big),
+        React.createElement("div", { style: S.anStatLab }, label));
+    return (React.createElement("div", { style: S.anWrap },
+        React.createElement("div", { style: { ...S.eyebrow, color: C.forge } }, "⚒ Lift analytics"),
+        React.createElement("div", { style: S.anGrid },
+            statBox(a.daysSincePR === null ? "—" : a.daysSincePR === 0 ? "today" : a.daysSincePR + "d", a.lastPR ? "since last PR" : "no PR yet — baseline set"),
+            statBox(a.change === null ? "—" : (a.change > 0 ? "+" : "") + a.change + "%", "4-wk est. 1RM", a.change === null ? null : a.change > 0 ? C.green : a.change < 0 ? C.red : null),
+            statBox(String(a.sessions), "sessions logged")),
+        a.best && React.createElement("div", { style: S.lineItem },
+            React.createElement("span", { style: S.lineKey }, "Best set ever"),
+            React.createElement("span", { style: S.lineVal }, fmt(a.best.w) + " " + unit + " × " + a.best.reps + " · " + shortDate(a.best.date))),
+        React.createElement("div", { style: S.lineItem },
+            React.createElement("span", { style: S.lineKey }, "Lifetime on this lift"),
+            React.createElement("span", { style: S.lineVal }, fmt(a.totalVol) + " " + unit + " · " + a.totalReps.toLocaleString() + " reps")),
+        React.createElement("div", { style: { ...S.anSub, marginTop: 14 } }, "Rep-range PRs — heaviest weight for at least N reps"),
+        React.createElement("div", { style: S.anRepGrid }, REP_PR_RANGES.map((r) => {
+            const b = a.repBest[r];
+            return React.createElement("div", { key: r, style: S.anRepCell },
+                React.createElement("div", { style: S.anRepN }, r + "RM"),
+                React.createElement("div", { style: S.anRepW }, b ? fmt(b.w) : "—"),
+                React.createElement("div", { style: S.anRepD }, b ? shortDate(b.date) : ""));
+        })),
+        React.createElement("div", { style: { ...S.anSub, marginTop: 14 } }, "Weekly volume — last 8 weeks (" + unit + ")"),
+        React.createElement("div", { style: S.anBars }, a.weeks.map((w, i) => React.createElement("div", { key: w.ws, style: S.anBarCol },
+            React.createElement("div", { style: { ...S.anBar, height: Math.max(2, Math.round((w.vol / maxVol) * 64)) + "px", background: i === a.weeks.length - 1 ? C.forge : C.forgeDeep, opacity: w.vol ? 1 : 0.25 } }),
+            React.createElement("div", { style: S.anBarLab }, shortDate(w.ws).split(" ")[0])))),
+        React.createElement("div", { style: { ...S.trophySub, textAlign: "right" } }, avgPrior > 0
+            ? "This week " + fmt(thisWeek) + " " + unit + " vs " + fmt(avgPrior) + " avg of prior 7"
+            : "Log a few weeks to see your trend")));
+}
+function ProgressView({ data, unit, progId, setProgId, onSetInjury, founder, onGate }) {
     // exercises that have any history
     const logged = (() => {
         const ids = [];
@@ -1879,6 +1977,9 @@ function ProgressView({ data, unit, progId, setProgId, onSetInjury }) {
                         React.createElement("span", { style: S.statUnit }, unit)),
                     React.createElement("div", { style: S.statSub }, "best ever"))),
             React.createElement(Chart, { points: points, unit: unit, pr: pr }),
+            founder
+                ? React.createElement(LiftAnalytics, { data: data, exId: current, unit: unit, today: localISO(new Date()) })
+                : React.createElement(FounderLock, { title: ANALYTICS_GATE.title, blurb: ANALYTICS_GATE.blurb, onOpen: () => onGate(ANALYTICS_GATE) }),
             React.createElement("div", { style: S.eyebrow }, "Sessions"),
             points.slice().reverse().map((p) => (React.createElement("div", { key: p.date, style: S.histRow },
                 React.createElement("span", { style: S.histDate }, shortDate(p.date)),
@@ -2340,6 +2441,138 @@ function overloadFor(data, exId, category, beforeDate, unit) {
     return { mode: "reps", weight: r1(base), reps: Math.min(hi, ref.minReps + 1), hi, prevW: base, prevR: ref.minReps, trend, why: null };
 }
 
+
+// ---- Plate calculator (free) + warm-up generator (Founder) ----
+// Standard barbell lifts only — machines, dumbbells and Smith bars have no fixed bar weight.
+const BARBELL_IDS = new Set(["bench", "incbench", "cgbench", "dead", "rack", "rdl", "row", "squat", "frontsq", "ohp", "curl", "hipthrust", "pclean", "cj", "snatch", "pushpress"]);
+const BAR_WT = { kg: 20, lb: 45 };
+const PLATES = { kg: [25, 20, 15, 10, 5, 2.5, 1.25], lb: [45, 35, 25, 10, 5, 2.5] };
+// Greedy fill per side. Returns { plates, bar, remainder } or null when the weight is at/below the bar.
+function platesFor(total, unit) {
+    const bar = BAR_WT[unit];
+    if (!(total > bar))
+        return null;
+    let side = Math.round(((total - bar) / 2) * 100) / 100;
+    const out = [];
+    for (const p of PLATES[unit]) {
+        while (side + 1e-9 >= p) {
+            out.push(p);
+            side = Math.round((side - p) * 100) / 100;
+        }
+    }
+    return { plates: out, bar, remainder: side };
+}
+// Ramp-up sets toward working weight W. Barbell: empty bar x10, 40% x5, 60% x3, 80% x2.
+// Other lifts: 50% x8, 75% x4. Rounded to the unit's plate step; anything at/below the
+// previous step, or at/above W, is dropped.
+function warmupSets(W, unit, barbell) {
+    const step = STEP[unit];
+    if (!(W > 0))
+        return [];
+    const bar = BAR_WT[unit];
+    const scheme = barbell ? [[0, 10], [0.4, 5], [0.6, 3], [0.8, 2]] : [[0.5, 8], [0.75, 4]];
+    const out = [];
+    let last = 0;
+    for (const [pct, reps] of scheme) {
+        let w = pct === 0 ? bar : Math.round((W * pct) / step) * step;
+        if (barbell && w < bar)
+            continue;
+        if (w >= W || w <= last)
+            continue;
+        if (barbell && pct > 0 && w <= bar)
+            continue;
+        out.push({ weight: r1(w), reps });
+        last = w;
+    }
+    if (barbell && W <= bar)
+        return [];
+    return out;
+}
+// Per-lift analytics (Founder). Pure: everything derives from the log.
+const REP_PR_RANGES = [1, 3, 5, 8, 10, 12];
+function liftAnalytics(data, exId, unit, today) {
+    const dates = Object.keys(data.workouts).sort().filter((d) => d <= today);
+    const repBest = {};
+    REP_PR_RANGES.forEach((r) => { repBest[r] = null; });
+    let best = null, totalVol = 0, totalReps = 0, sessions = 0;
+    let runBest = 0, runTopW = 0, lastPR = null, firstDate = null;
+    const sessBest = []; // [{date, e1}]
+    for (const d of dates) {
+        const ex = (data.workouts[d].exercises || []).filter((e) => e.id === exId);
+        let dayBest = 0, dayTopW = 0, worked = false;
+        ex.forEach((e) => e.sets.forEach((st) => {
+            if (!isWorkDone(st) || (st.reps || 0) <= 0)
+                return;
+            const w = inUnit(st, unit);
+            if (w <= 0)
+                return;
+            worked = true;
+            const m = sideMult(st);
+            totalVol += w * st.reps * m;
+            totalReps += st.reps * m;
+            if (w > dayTopW)
+                dayTopW = w;
+            const e1 = e1rm(st, unit);
+            if (e1 > dayBest)
+                dayBest = e1;
+            if (!best || e1 > best.e1)
+                best = { e1, w, reps: st.reps, date: d };
+            REP_PR_RANGES.forEach((r) => {
+                if (st.reps >= r && (!repBest[r] || w > repBest[r].w))
+                    repBest[r] = { w, date: d };
+            });
+        }));
+        if (!worked)
+            continue;
+        sessions++;
+        sessBest.push({ date: d, e1: dayBest });
+        // A PR = new heaviest weight OR new est. 1RM — same rule as the in-session 🏆 pop.
+        if (firstDate === null) {
+            firstDate = d;
+            runBest = dayBest;
+            runTopW = dayTopW;
+        }
+        else {
+            if (dayBest > runBest + 0.01 || dayTopW > runTopW + 0.01)
+                lastPR = d;
+            runBest = Math.max(runBest, dayBest);
+            runTopW = Math.max(runTopW, dayTopW);
+        }
+    }
+    const dayDiff = (a, b) => Math.round((fromISO(b) - fromISO(a)) / 86400000);
+    // weekly volume, oldest -> newest, last 8 weeks incl. this one
+    const curWS = weekStartISO(today);
+    const weeks = [];
+    for (let i = 7; i >= 0; i--) {
+        const ws = addDaysISO(curWS, -7 * i);
+        let v = 0;
+        weekDates(ws).forEach((d) => {
+            const day = data.workouts[d];
+            if (!day)
+                return;
+            (day.exercises || []).forEach((e) => {
+                if (e.id !== exId)
+                    return;
+                e.sets.forEach((st) => { if (isWorkDone(st)) v += inUnit(st, unit) * (st.reps || 0) * sideMult(st); });
+            });
+        });
+        weeks.push({ ws, vol: v });
+    }
+    // best e1RM in the last 28 days vs the 28 days before
+    const c1 = addDaysISO(today, -27), c0 = addDaysISO(today, -55);
+    let recent = 0, prior = 0;
+    sessBest.forEach((x) => {
+        if (x.date >= c1)
+            recent = Math.max(recent, x.e1);
+        else if (x.date >= c0)
+            prior = Math.max(prior, x.e1);
+    });
+    const change = recent > 0 && prior > 0 ? Math.round(((recent - prior) / prior) * 1000) / 10 : null;
+    return {
+        sessions, totalVol, totalReps, best, repBest, weeks, change,
+        lastPR, daysSincePR: lastPR ? dayDiff(lastPR, today) : null, firstDate,
+    };
+}
 // CD6 — scarcity. One limited-edition badge per calendar month. Earn it inside
 // the month or it is gone for good — the cabinet keeps the gap.
 const MONTH_BADGE_POOL = [
@@ -3806,6 +4039,26 @@ Object.assign(S, {
     founderTitle: { fontFamily: cond, fontWeight: 700, fontSize: 18, letterSpacing: 1, textTransform: "uppercase", color: C.chalk, marginTop: 4 },
     founderLore: { fontFamily: body, fontSize: 12.5, color: C.dim, lineHeight: 1.55, margin: "8px 4px 14px" },
     founderBuy: { width: "100%", background: C.forge, color: C.iron, border: "none", borderRadius: 11, padding: "13px", fontFamily: cond, fontWeight: 700, fontSize: 15, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" },
+    lockCard: { width: "100%", textAlign: "left", margin: "0 0 22px", background: "linear-gradient(180deg, rgba(242,162,60,0.08), rgba(242,162,60,0.02))", border: `1.5px dashed ${C.forgeDeep}`, borderRadius: 14, padding: "14px 16px", cursor: "pointer" },
+    lockTag: { fontFamily: cond, fontWeight: 700, fontSize: 11, letterSpacing: 1.5, textTransform: "uppercase", color: C.forge },
+    lockTitle: { fontFamily: cond, fontWeight: 700, fontSize: 18, color: C.chalk, marginTop: 4, letterSpacing: 0.4 },
+    lockBlurb: { fontFamily: body, fontSize: 12.5, color: C.dim, lineHeight: 1.5, marginTop: 4 },
+    lockCta: { fontFamily: cond, fontWeight: 700, fontSize: 13, color: C.forge, letterSpacing: 1, textTransform: "uppercase", marginTop: 8 },
+    anWrap: { background: C.iron2, border: `1px solid ${C.forgeDeep}`, borderRadius: 14, padding: "14px 14px 10px", marginBottom: 22 },
+    anGrid: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, margin: "6px 0 8px" },
+    anStat: { background: "rgba(0,0,0,0.22)", borderRadius: 10, padding: "10px 4px", textAlign: "center" },
+    anStatBig: { fontFamily: mono, fontWeight: 700, fontSize: 19, color: C.chalk, lineHeight: 1 },
+    anStatLab: { fontFamily: cond, fontSize: 9.5, letterSpacing: 0.8, textTransform: "uppercase", color: C.faint, marginTop: 5 },
+    anSub: { fontFamily: cond, fontSize: 11, letterSpacing: 1.2, textTransform: "uppercase", color: C.faint, marginBottom: 8 },
+    anRepGrid: { display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 5 },
+    anRepCell: { background: C.iron3, border: `1px solid ${C.lineSoft}`, borderRadius: 8, padding: "7px 2px", textAlign: "center" },
+    anRepN: { fontFamily: cond, fontWeight: 700, fontSize: 11, color: C.forge, letterSpacing: 0.5 },
+    anRepW: { fontFamily: mono, fontWeight: 700, fontSize: 13, color: C.chalk, marginTop: 3 },
+    anRepD: { fontFamily: cond, fontSize: 9, color: C.faint, marginTop: 2, minHeight: 11 },
+    anBars: { display: "flex", alignItems: "flex-end", gap: 6, height: 84, padding: "0 2px" },
+    anBarCol: { flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: "100%" },
+    anBar: { width: "100%", borderRadius: "4px 4px 0 0" },
+    anBarLab: { fontFamily: mono, fontSize: 9, color: C.faint, marginTop: 4 },
     founderCodeLink: { display: "block", width: "100%", marginTop: 10, background: "none", border: "none", color: C.faint, fontFamily: cond, fontSize: 12, letterSpacing: 0.5, textTransform: "uppercase", cursor: "pointer" },
     founderTag: { display: "inline-block", marginTop: 6, border: `1px solid ${C.forgeDeep}`, color: C.forge, borderRadius: 20, padding: "4px 12px", fontFamily: cond, fontWeight: 700, fontSize: 11, letterSpacing: 1, textTransform: "uppercase" },
   ssTag: { display: "inline-block", marginTop: 6, border: `1px dashed ${C.forgeDeep}`, color: C.forge, borderRadius: 20, padding: "4px 11px", fontFamily: cond, fontWeight: 700, fontSize: 11, letterSpacing: 0.8 },
