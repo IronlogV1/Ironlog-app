@@ -50,7 +50,7 @@ const C = {
 const STEP = { kg: 2.5, lb: 5 };
 // Bump this whenever we ship. Shown in Cabinet so the live build is verifiable
 // at a glance — stale service-worker caches otherwise look identical.
-const BUILD = "2026.09.02";
+const BUILD = "2026.10.25";
 // ---- Founder unlock (one-time supporter tier) ----
 // FILL THESE IN once your Stripe payment link is live:
 //  - url:   the Stripe Payment Link. Set its "after payment" redirect to
@@ -223,6 +223,7 @@ function IronLog() {
     var _a, _b, _c, _d, _e, _f;
     const [data, setData] = useState({ unit: "kg", workouts: {}, custom: [], restDays: {}, bodyweight: null, bwLog: {}, freezeDays: {}, templates: [], drops: {}, checkins: {}, restPrefs: {}, lastBackup: null, coffeeAsks: {}, injuries: {}, guideSeen: false, founder: false });
     const [loaded, setLoaded] = useState(false);
+    const [founderWelcome, setFounderWelcome] = useState(false);
     const [view, setView] = useState("log"); // log | week | progress | cabinet
     const [pickerOpen, setPickerOpen] = useState(false);
     const [workoutsOpen, setWorkoutsOpen] = useState(false);
@@ -252,6 +253,7 @@ function IronLog() {
             const params = new URLSearchParams(location.search);
             if (params.get("unlock") === FOUNDER.token) {
                 setData((d) => ({ ...d, founder: true }));
+                setFounderWelcome(true);
                 history.replaceState(null, "", location.pathname);
             }
         }
@@ -676,6 +678,7 @@ function IronLog() {
         React.createElement("main", { style: S.main }, !loaded ? (React.createElement("div", { style: S.loading }, "Loading the rack\u2026")) : view === "log" ? (React.createElement(LogView, { dateLabel: headDate(logDate), exercises: logEx, todayExercises: todayEx, unit: unit, data: data, today: today, logDate: logDate, onChangeDate: setLogDate, dayTime: ((_c = data.workouts[logDate]) === null || _c === void 0 ? void 0 : _c.time) || "", onChangeTime: setDayTime, restMarked: restMarked, restKind: restKind, onRest: markRestDay, onUndoRest: clearRestDay, onAdd: () => setPickerOpen(true), onSetDone: handleSetDone, onRestPref: setRestPref, onLogBW: logBW, onLogCheckin: logCheckin, cardio: ((_d = data.workouts[logDate]) === null || _d === void 0 ? void 0 : _d.cardio) || [], onAddCardio: () => setCardioOpen(true), updateCardio: updateCardio, removeCardio: removeCardio, onOpenWorkouts: () => setWorkoutsOpen(true), onSuggest: () => setSuggestOpen(true), hasTemplates: (data.templates || []).length > 0, updateEx: updateEx, removeEx: removeEx, startRest: (s) => setRest({ seconds: s, total: s }), onShare: finishSession, freezeAvail: freezeAvail, onFreeze: useFreeze, activeSession: ((data.workouts[logDate] || {}).activeSession) || 0, sessionFinished: ((data.workouts[logDate] || {}).finished) || {}, onStartAnother: startAnotherWorkout })) : view === "week" ? (React.createElement(WeekView, { data: data, unit: unit, today: today, onShareMonth: (m) => setShareMonth(m) })) : view === "cabinet" ? (React.createElement(CabinetView, { data: data, unit: unit, today: today, onSetBodyweight: setBodyweight, onImport: importData, onBackedUp: () => setData((p) => ({ ...p, lastBackup: Date.now() })), founder: data.founder, onBuyFounder: buyFounder, onRedeemFounder: redeemFounder })) : (React.createElement(ProgressView, { data: data, unit: unit, progId: progId, setProgId: setProgId, onSetInjury: setInjury }))),
         guideOpen && (React.createElement(GuideSheet, { onClose: () => setGuideOpen(false) })),
         loaded && view === "log" && !data.guideSeen && (React.createElement(GuidePrompt, { onOpen: openGuide, onDismiss: markGuideSeen })),
+        founderWelcome && (React.createElement(FounderWelcome, { onClose: () => setFounderWelcome(false) })),
         coffeeAsk && (React.createElement(CoffeeAsk, { ask: coffeeAsk, onPick: (action) => { if (action === "never") markCoffeeAsk("never"); else markCoffeeAsk(coffeeAsk.key); setCoffeeAsk(null); } })),
         prPop && (React.createElement(PRPop, { pop: prPop, unit: unit, onClose: () => setPrPop(null) })),
         postCheckinOpen && (React.createElement(PostCheckin, { existing: (_e = (data.checkins || {})[logDate]) === null || _e === void 0 ? void 0 : _e.post, onDone: afterPostCheckin, onCancel: () => setPostCheckinOpen(false) })),
@@ -1004,6 +1007,38 @@ function GuideSheet({ onClose }) {
                     gStep("2", "New phone or new link?", "Cabinet \u2192 Import \u2192 paste it back. Everything returns exactly as it was \u2014 nothing lost."),
                     React.createElement("div", { style: S.gTip }, "Lost the thread? The \uD83D\uDCD6 button, top-right, reopens this guide any time.")),
                 React.createElement("button", { style: { ...S.dropBtn, width: "100%", marginTop: 8 }, onClick: onClose }, "Got it \u2014 let\u2019s train")))));
+}
+// Shown once, right after Stripe redirects a buyer back with ?unlock=founder.
+// iPhone home-screen apps keep storage separate from Safari, so the redirect
+// unlocks Safari's copy only. Hand the buyer the code to enter in the app they
+// actually use (also covers buyers who paid on a different device).
+function FounderWelcome({ onClose }) {
+    const [copied, setCopied] = useState(false);
+    let iosBrowser = false;
+    try {
+        const ua = navigator.userAgent || "";
+        const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+        const standalone = window.navigator.standalone === true || (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
+        iosBrowser = isIOS && !standalone;
+    }
+    catch (e) { }
+    const copy = async () => {
+        try {
+            await navigator.clipboard.writeText(FOUNDER.code);
+            setCopied(true);
+        }
+        catch (e) { }
+    };
+    return (React.createElement("div", { style: { ...S.sheetBackdrop, zIndex: 55 } },
+        React.createElement("div", { style: { ...S.dropCard, textAlign: "center" }, onClick: (e) => e.stopPropagation() },
+            React.createElement("div", { style: S.dropEyebrow }, "⚒ Founding Lifter"),
+            React.createElement("div", { style: { ...S.dropName, marginTop: 14 } }, "Thank you — you’re unlocked"),
+            React.createElement("div", { style: S.dropLore }, iosBrowser
+                ? "On iPhone, the IRONLOG app on your home screen is separate from Safari. Open it, go to Cabinet → “Already backed it? Enter your code”, and enter the code below."
+                : "Using IRONLOG on another phone, or from your home screen? Go to Cabinet → “Already backed it? Enter your code” there and enter the code below."),
+            React.createElement("div", { style: { fontFamily: mono, fontWeight: 700, fontSize: 20, letterSpacing: 2, color: C.forge, border: `1px dashed ${C.forgeDeep}`, borderRadius: 10, padding: "10px 12px", marginBottom: 12, userSelect: "all", WebkitUserSelect: "all" } }, FOUNDER.code),
+            React.createElement("button", { style: S.dropBtn, onClick: copy }, copied ? "Copied ✓" : "Copy code"),
+            React.createElement("button", { style: { ...S.hiitCtlDark, width: "100%", marginTop: 10 }, onClick: onClose }, "Done"))));
 }
 function CoffeeAsk({ ask, onPick }) {
     return (React.createElement("div", { style: S.sheetBackdrop },
