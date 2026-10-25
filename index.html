@@ -50,7 +50,7 @@ const C = {
 const STEP = { kg: 2.5, lb: 5 };
 // Bump this whenever we ship. Shown in Cabinet so the live build is verifiable
 // at a glance — stale service-worker caches otherwise look identical.
-const BUILD = "2026.10.25f";
+const BUILD = "2026.10.25g";
 // ---- Founder unlock (one-time supporter tier) ----
 // FILL THESE IN once your Stripe payment link is live:
 //  - url:   the Stripe Payment Link. Set its "after payment" redirect to
@@ -229,6 +229,8 @@ function IronLog() {
     const [workoutsOpen, setWorkoutsOpen] = useState(false);
     const [suggestOpen, setSuggestOpen] = useState(false);
     const [guideOpen, setGuideOpen] = useState(false);
+    const [wrappedOpen, setWrappedOpen] = useState(false);
+    const [seasonReportOpen, setSeasonReportOpen] = useState(false);
     const [incomingCh, setIncomingCh] = useState(null); // challenge just received via link
     const [shareCh, setShareCh] = useState(null); // challenge being created
     const [pendingAdd, setPendingAdd] = useState(null); // lift to add once Today is on the real date
@@ -366,6 +368,18 @@ function IronLog() {
             return false;
         receiveChallenge(ch);
         return true;
+    };
+    // ---- Seasons ----
+    const startSeason = (goal) => setData((p) => ({ ...p, season: { goal, start: today, base: seasonSnapshot(p, addDaysISO(today, -1)) } }));
+    const abandonSeason = () => setData((p) => ({ ...p, season: null }));
+    const bankSeason = (rep) => {
+        setData((p) => {
+            if (!p.season)
+                return p;
+            const done = [...(p.seasonsDone || []), { goal: p.season.goal, start: p.season.start, end: addDaysISO(p.season.start, 41), grade: rep.grade, metric: rep.metric, unitLabel: rep.unitLabel }];
+            return { ...p, season: null, seasonsDone: done.slice(-40) };
+        });
+        setSeasonReportOpen(false);
     };
     const dismissChallenge = (id) => setData((p) => ({ ...p, challenges: (p.challenges || []).filter((c) => c.id !== id) }));
     const addChallengeLift = (c) => {
@@ -546,6 +560,19 @@ function IronLog() {
         }
         const prev = (data.finishers || {})[run.exId];
         const out = finisherOutcome(prev, reps, run.w, run.unit, run.name);
+        // Gauntlet: did this Finisher count toward (or complete) this week's theme?
+        try {
+            const theme = gauntletTheme(weekStartISO(logDate));
+            const dayNow = data.workouts[logDate];
+            const exObj = dayNow && dayNow.exercises.find((e) => e.uid === run.exUid);
+            if (exObj && theme.test(exObj)) {
+                const before = gauntletDay(data, logDate, theme);
+                const tmp = { workouts: { [logDate]: { exercises: dayNow.exercises.map((e) => (e.uid === run.exUid ? { ...e, sets: [...e.sets, { finisher: true, done: true, reps }] } : e)) } } };
+                const after = gauntletDay(tmp, logDate, theme);
+                out.gauntlet = { label: theme.label, count: after.count, score: after.score, justDone: before.score == null && after.score != null, last: gauntletWeek(data, addDaysISO(weekStartISO(logDate), -7), null).best };
+            }
+        }
+        catch (e) { }
         updateEx(run.exUid, (e) => {
             e.sets.push({ weight: run.w, reps, unit: run.unit, done: true, warmup: false, finisher: true, side: e.unilateral ? "B" : null });
         });
@@ -687,7 +714,7 @@ function IronLog() {
     const markCoffeeAsk = (key) => setData((p) => ({ ...p, coffeeAsks: { ...(p.coffeeAsks || {}), [key]: true } }));
     const afterPostCheckin = (post) => {
         setPostCheckinOpen(false);
-        mutateDay((day) => { day.finished = Object.assign({}, day.finished, { [day.activeSession || 0]: true }); });
+        mutateDay((day) => { day.finished = Object.assign({}, day.finished, { [day.activeSession || 0]: true }); if (logDate === today) day.endTime = nowHM(); });
         if (post)
             logCheckin(logDate, "post", post);
         // Milestone gratitude ask — fires once per milestone, after the share
@@ -774,6 +801,8 @@ function IronLog() {
         founder: !!obj.founder,
         finishers: obj.finishers && typeof obj.finishers === "object" ? obj.finishers : {},
         finisherOff: !!obj.finisherOff,
+        season: obj.season && typeof obj.season === "object" ? obj.season : null,
+        seasonsDone: Array.isArray(obj.seasonsDone) ? obj.seasonsDone : [],
         handle: typeof obj.handle === "string" ? obj.handle.slice(0, 24) : "",
         challenges: Array.isArray(obj.challenges) ? obj.challenges.slice(0, 30) : [],
     });
@@ -806,11 +835,14 @@ function IronLog() {
                 React.createElement(Tab, { active: view === "log", onClick: () => setView("log") }, "Today"),
                 React.createElement(Tab, { active: view === "week", onClick: () => setView("week") }, "Week"),
                 React.createElement(Tab, { active: view === "progress", onClick: () => setView("progress") }, "Progress"),
+                React.createElement(Tab, { active: view === "insights", onClick: () => setView("insights") }, "Insights"),
                 React.createElement(Tab, { active: view === "cabinet", onClick: () => setView("cabinet") }, "Cabinet"))),
-        React.createElement("main", { style: S.main }, !loaded ? (React.createElement("div", { style: S.loading }, "Loading the rack\u2026")) : view === "log" ? (React.createElement(LogView, { dateLabel: headDate(logDate), exercises: logEx, todayExercises: todayEx, unit: unit, data: data, today: today, logDate: logDate, onChangeDate: setLogDate, dayTime: ((_c = data.workouts[logDate]) === null || _c === void 0 ? void 0 : _c.time) || "", onChangeTime: setDayTime, restMarked: restMarked, restKind: restKind, onRest: markRestDay, onUndoRest: clearRestDay, onAdd: () => setPickerOpen(true), onSetDone: handleSetDone, onRestPref: setRestPref, onLogBW: logBW, onLogCheckin: logCheckin, cardio: ((_d = data.workouts[logDate]) === null || _d === void 0 ? void 0 : _d.cardio) || [], onAddCardio: () => setCardioOpen(true), updateCardio: updateCardio, removeCardio: removeCardio, onOpenWorkouts: () => setWorkoutsOpen(true), onSuggest: () => setSuggestOpen(true), hasTemplates: (data.templates || []).length > 0, updateEx: updateEx, removeEx: removeEx, startRest: (s) => setRest({ seconds: s, total: s }), onShare: finishSession, freezeAvail: freezeAvail, onFreeze: useFreeze, activeSession: ((data.workouts[logDate] || {}).activeSession) || 0, sessionFinished: ((data.workouts[logDate] || {}).finished) || {}, onStartAnother: startAnotherWorkout, founder: !!data.founder, onGate: setGate, onFinisher: setFinRun, onGoWeek: () => setView("week") })) : view === "week" ? (React.createElement(WeekView, { data: data, unit: unit, today: today, founder: !!data.founder, onGate: setGate, onPaste: receiveFromText, onAddLift: addChallengeLift, onDismiss: dismissChallenge, onShareMonth: (m) => setShareMonth(m) })) : view === "cabinet" ? (React.createElement(CabinetView, { data: data, unit: unit, today: today, onSetBodyweight: setBodyweight, onImport: importData, onBackedUp: () => setData((p) => ({ ...p, lastBackup: Date.now() })), founder: data.founder, onBuyFounder: buyFounder, onRedeemFounder: redeemFounder, onGate: setGate, onToggleFinisher: () => setData((p) => ({ ...p, finisherOff: !p.finisherOff })) })) : (React.createElement(ProgressView, { data: data, unit: unit, progId: progId, setProgId: setProgId, onSetInjury: setInjury, founder: !!data.founder, onGate: setGate }))),
+        React.createElement("main", { style: S.main }, !loaded ? (React.createElement("div", { style: S.loading }, "Loading the rack\u2026")) : view === "log" ? (React.createElement(LogView, { dateLabel: headDate(logDate), exercises: logEx, todayExercises: todayEx, unit: unit, data: data, today: today, logDate: logDate, onChangeDate: setLogDate, dayTime: ((_c = data.workouts[logDate]) === null || _c === void 0 ? void 0 : _c.time) || "", onChangeTime: setDayTime, restMarked: restMarked, restKind: restKind, onRest: markRestDay, onUndoRest: clearRestDay, onAdd: () => setPickerOpen(true), onSetDone: handleSetDone, onRestPref: setRestPref, onLogBW: logBW, onLogCheckin: logCheckin, cardio: ((_d = data.workouts[logDate]) === null || _d === void 0 ? void 0 : _d.cardio) || [], onAddCardio: () => setCardioOpen(true), updateCardio: updateCardio, removeCardio: removeCardio, onOpenWorkouts: () => setWorkoutsOpen(true), onSuggest: () => setSuggestOpen(true), hasTemplates: (data.templates || []).length > 0, updateEx: updateEx, removeEx: removeEx, startRest: (s) => setRest({ seconds: s, total: s }), onShare: finishSession, freezeAvail: freezeAvail, onFreeze: useFreeze, activeSession: ((data.workouts[logDate] || {}).activeSession) || 0, sessionFinished: ((data.workouts[logDate] || {}).finished) || {}, onStartAnother: startAnotherWorkout, founder: !!data.founder, onGate: setGate, onFinisher: setFinRun, onGoWeek: () => setView("week") })) : view === "week" ? (React.createElement(WeekView, { data: data, unit: unit, today: today, founder: !!data.founder, onGate: setGate, onStartSeason: startSeason, onAbandonSeason: abandonSeason, onOpenReport: () => setSeasonReportOpen(true), onWrapped: () => setWrappedOpen(true), onPaste: receiveFromText, onAddLift: addChallengeLift, onDismiss: dismissChallenge, onShareMonth: (m) => setShareMonth(m) })) : view === "insights" ? (React.createElement(InsightsView, { data: data, unit: unit, today: today, founder: !!data.founder, onGate: setGate })) : view === "cabinet" ? (React.createElement(CabinetView, { data: data, unit: unit, today: today, onSetBodyweight: setBodyweight, onImport: importData, onBackedUp: () => setData((p) => ({ ...p, lastBackup: Date.now() })), founder: data.founder, onBuyFounder: buyFounder, onRedeemFounder: redeemFounder, onGate: setGate, onToggleFinisher: () => setData((p) => ({ ...p, finisherOff: !p.finisherOff })) })) : (React.createElement(ProgressView, { data: data, unit: unit, progId: progId, setProgId: setProgId, onSetInjury: setInjury, founder: !!data.founder, onGate: setGate }))),
         guideOpen && (React.createElement(GuideSheet, { onClose: () => setGuideOpen(false) })),
         loaded && view === "log" && !data.guideSeen && (React.createElement(GuidePrompt, { onOpen: openGuide, onDismiss: markGuideSeen })),
         finRun && (React.createElement(FinisherRun, { run: finRun, unit: unit, onComplete: (reps) => completeFinisher(finRun, reps), onClose: () => setFinRun(null), onChallenge: (c) => { setFinRun(null); setShareCh(c); } })),
+        wrappedOpen && (React.createElement(WrappedStory, { data: data, unit: unit, today: today, founder: !!data.founder, onGate: (g) => { setWrappedOpen(false); setGate(g); }, onClose: () => setWrappedOpen(false) })),
+        seasonReportOpen && data.season && (React.createElement(SeasonReport, { data: data, today: today, onBank: bankSeason, onClose: () => setSeasonReportOpen(false) })),
         incomingCh && (React.createElement(ChallengeIncoming, { ch: incomingCh, unit: unit, onAdd: () => addChallengeLift(incomingCh), onClose: () => setIncomingCh(null) })),
         shareCh && (React.createElement(ChallengeShare, { payload: shareCh, unit: unit, handle: data.handle || "", onSaveHandle: (h) => setData((p) => ({ ...p, handle: h })), onClose: () => setShareCh(null) })),
         gate && (React.createElement(FounderGate, { gate: gate, price: FOUNDER.price, onBuy: () => { buyFounder(); }, onCode: () => { setGate(null); setView("cabinet"); }, onClose: () => setGate(null) })),
@@ -1120,9 +1152,9 @@ function GuideSheet({ onClose }) {
             React.createElement("div", { style: S.sheetScroll },
                 React.createElement("div", { style: S.gIntro }, "A fast log for lifting and cardio. No account, no signal needed \u2014 your training lives on this device. Add it to your home screen from the browser\u2019s share menu to run it full-screen like an app."),
                 React.createElement("div", { style: S.gSection },
-                    React.createElement("div", { style: S.gKicker }, "The four tabs"),
-                    React.createElement("div", { style: S.gTabs }, ["Today", "Week", "Progress", "Cabinet"].map((t, i) => React.createElement("span", { key: t, style: { ...S.gTab, ...(i === 0 ? S.gTabOn : {}) } }, t))),
-                    React.createElement("div", { style: S.gP }, "Today logs your session \u00B7 Week shows your streak and history \u00B7 Progress holds charts and recovery \u00B7 Cabinet keeps bodyweight, backups and trophies.")),
+                    React.createElement("div", { style: S.gKicker }, "The five tabs"),
+                    React.createElement("div", { style: S.gTabs }, ["Today", "Week", "Progress", "Insights", "Cabinet"].map((t, i) => React.createElement("span", { key: t, style: { ...S.gTab, ...(i === 0 ? S.gTabOn : {}) } }, t))),
+                    React.createElement("div", { style: S.gP }, "Today logs your session \u00B7 Week holds your streak, Season, Gauntlet and challenges \u00B7 Progress holds charts and recovery \u00B7 Insights reads your training like a sports scientist \u00B7 Cabinet keeps bodyweight, backups and trophies.")),
                 React.createElement("div", { style: S.gSection },
                     React.createElement("div", { style: S.gKicker }, "Start a session"),
                     React.createElement("div", { style: S.gDemo }, React.createElement("div", { style: { ...S.suggestBtn, marginTop: 0, display: "inline-block" } }, "\u26A1 Suggest today\u2019s session")),
@@ -1492,7 +1524,7 @@ function DailyStrip({ data, unit, logDate, onLogBW, onLogCheckin }) {
     const openCI = () => {
         setF(pre
             ? { energy: pre.energy, sleep: pre.sleep, muscles: pre.muscles != null ? pre.muscles : 6 - (pre.soreness || 3), note: pre.note || "", focus: pre.focus || "strength" }
-            : { energy: 0, sleep: 0, muscles: 0, note: "", focus: "strength" });
+            : { energy: 0, sleep: 0, muscles: 0, note: "", focus: data.season && data.season.goal === "volume" ? "volume" : "strength" });
         setMode("ci");
     };
     const canCI = f.energy > 0 && f.sleep > 0 && f.muscles > 0;
@@ -2225,6 +2257,9 @@ function FinisherRun({ run, unit, onComplete, onClose, onChallenge }) {
             React.createElement("div", { style: S.finEye }, "⚒ FORGED — Level " + res.nextLevel),
             React.createElement("div", { style: S.finSub }, "Next Finisher: " + fmt(inUnit({ weight: res.nextW, unit: res.unit }, unit)) + " " + unit + ". The chase starts again.")),
         done && res.record && React.createElement("div", { style: { ...S.hiitRound, marginTop: 8, color: C.forge } }, "Forge-drop chance doubled this session"),
+        done && res.gauntlet && React.createElement("div", { style: { ...S.finTarget, marginTop: 12, animation: res.gauntlet.justDone ? "flare 0.9s ease" : "none" } }, res.gauntlet.justDone
+            ? "\u2692 " + res.gauntlet.label + " complete \u2014 " + res.gauntlet.score + (res.gauntlet.last != null ? " (last week " + res.gauntlet.last + ")" : "")
+            : res.gauntlet.label + ": " + Math.min(3, res.gauntlet.count) + "/3 today" + (res.gauntlet.score != null ? " \u00B7 score " + res.gauntlet.score : "")),
         done && React.createElement("div", { style: { ...S.hiitBtnRow, marginTop: 22 } },
             React.createElement("button", { style: S.dropBtn, onClick: () => tryShare(shareText, setHint) }, "Share ↗"),
             LIB_IDS.has(run.exId) ? React.createElement("button", { style: S.hiitCtl, onClick: () => onChallenge && onChallenge({ t: "fin", exId: run.exId, name: run.name, w: res.w, unit: res.unit, reps: res.reps }) }, "Challenge ⚔") : null,
@@ -2250,6 +2285,196 @@ function FinisherBoard({ data, unit, founder, onGate, onToggle }) {
                     React.createElement("span", { style: { ...S.pctChip, color: C.forge, background: "rgba(242,162,60,0.1)", borderColor: C.forgeDeep } }, fmt(inUnit({ weight: r.w, unit: r.unit }, unit)) + " " + unit),
                     React.createElement("span", { style: S.prBoardVal }, (r.top || 0) + " " + (t ? t.icon : "")));
             }))));
+}
+// ===================== Insights tab =====================
+const LOAD_GATE = { title: "Monotony & strain", blurb: "Foster’s session-RPE model: see how repetitive (monotony) and how taxing (strain) each week was, with a 6-week load trend — the pattern sport scientists watch for overreaching." };
+const BALANCE_GATE = { title: "Strength balance ratios", blurb: "Row:bench, overhead:bench, bench:squat and deadlift:squat against common reference ranges — spot the lagging pattern before it limits you." };
+const PROFILE_GATE = { title: "Strength-endurance profile", blurb: "Fits your personal rep curve per lift from your rep PRs and Finishers — strength-leaning or endurance-leaning — and corrects your 1RM estimate from high-rep sets." };
+const DRIVERS_GATE = { title: "What drives your best days", blurb: "After 20 checked-in sessions, see how sleep, energy, freshness, time of day and rest days move your top-set performance — your own data, not averages." };
+function InsightsView({ data, unit, today, founder, onGate }) {
+    return (React.createElement("div", null,
+        React.createElement("div", { style: { ...S.hmNote, marginBottom: 14 } }, "Your training, read like a sports scientist would. Signals are estimates from your own log — use them as guides, not diagnoses."),
+        React.createElement(DeloadPanel, { sig: deloadSignal(data, today), founder: founder, onGate: onGate }),
+        React.createElement(LoadPanel, { data: data, today: today, founder: founder, onGate: onGate }),
+        React.createElement(MusclePanel, { data: data, unit: unit, today: today, founder: founder, onGate: onGate }),
+        founder ? React.createElement(BalancePanel, { data: data, today: today }) : React.createElement(FounderLock, { title: BALANCE_GATE.title, blurb: BALANCE_GATE.blurb, onOpen: () => onGate(BALANCE_GATE) }),
+        founder ? React.createElement(ProfilePanel, { data: data, unit: unit }) : React.createElement(FounderLock, { title: PROFILE_GATE.title, blurb: PROFILE_GATE.blurb, onOpen: () => onGate(PROFILE_GATE) }),
+        founder ? React.createElement(DriversPanel, { data: data }) : React.createElement(FounderLock, { title: DRIVERS_GATE.title, blurb: DRIVERS_GATE.blurb, onOpen: () => onGate(DRIVERS_GATE) })));
+}
+function LoadPanel({ data, today, founder, onGate }) {
+    const tl = trainingLoad(data, today);
+    const c = tl.cur;
+    const vs = tl.avg4 > 0 ? Math.round((c.load / tl.avg4 - 1) * 100) : null;
+    const maxL = Math.max(1, ...tl.weeks.map((w) => w.load));
+    return (React.createElement("div", { style: S.anWrap },
+        React.createElement("div", { style: S.eyebrow }, "Training load · session RPE × minutes"),
+        React.createElement("div", { style: S.anGrid },
+            React.createElement("div", { style: S.anStat }, React.createElement("div", { style: S.anStatBig }, c.load.toLocaleString()), React.createElement("div", { style: S.anStatLab }, "load this week")),
+            React.createElement("div", { style: S.anStat }, React.createElement("div", { style: { ...S.anStatBig, color: vs == null ? C.chalk : vs > 30 ? C.red : vs < -30 ? C.forge : C.green } }, vs == null ? "—" : (vs > 0 ? "+" : "") + vs + "%"), React.createElement("div", { style: S.anStatLab }, "vs 4-wk avg")),
+            React.createElement("div", { style: S.anStat }, founder
+                ? React.createElement(React.Fragment, null, React.createElement("div", { style: { ...S.anStatBig, color: c.monotony > 2 ? C.red : C.chalk } }, c.monotony == null ? "—" : c.monotony), React.createElement("div", { style: S.anStatLab }, "monotony"))
+                : React.createElement("button", { style: { background: "none", border: "none", cursor: "pointer", width: "100%" }, onClick: () => onGate(LOAD_GATE) }, React.createElement("div", { style: { ...S.anStatBig, color: C.forge } }, "⚒"), React.createElement("div", { style: S.anStatLab }, "monotony")))),
+        founder && React.createElement(React.Fragment, null,
+            React.createElement("div", { style: S.anBars }, tl.weeks.map((w, i) => React.createElement("div", { key: w.ws, style: S.anBarCol },
+                React.createElement("div", { style: { ...S.anBar, height: Math.max(2, Math.round((w.load / maxL) * 64)) + "px", background: i === tl.weeks.length - 1 ? C.forge : C.forgeDeep, opacity: w.load ? 1 : 0.25 } }),
+                React.createElement("div", { style: S.anBarLab }, shortDate(w.ws).split(" ")[0])))),
+            React.createElement("div", { style: S.lineItem }, React.createElement("span", { style: S.lineKey }, "Strain this week"), React.createElement("span", { style: S.lineVal }, c.strain == null ? "needs 2+ sessions" : c.strain.toLocaleString() + (c.monotony > 2 ? " · monotony high — vary hard and easy days" : "")))),
+        React.createElement("div", { style: { ...S.hmNote, marginTop: 10, marginBottom: 0 } }, (c.missing ? c.missing + " session" + (c.missing === 1 ? "" : "s") + " this week missing an RPE — rate it at Finish. " : "") + "Duration comes from your start time to Finish; untimed sessions are estimated.")));
+}
+function BalancePanel({ data, today }) {
+    const rows = balanceRatios(data, today);
+    const names = { row: "barbell row", bench: "bench press", ohp: "overhead press", squat: "back squat", dead: "deadlift" };
+    return (React.createElement("div", { style: S.anWrap },
+        React.createElement("div", { style: { ...S.eyebrow, color: C.forge } }, "⚒ Strength balance · best est. 1RMs, last 120 days"),
+        rows.map((r) => React.createElement("div", { key: r.key, style: S.lineItem },
+            React.createElement("span", { style: S.lineKey }, r.label),
+            React.createElement("span", { style: { ...S.lineVal, fontSize: 12.5, maxWidth: "64%" } }, r.ratio == null ? "Log a " + names[r.missing] + " to compare" :
+                React.createElement(React.Fragment, null, React.createElement("b", { style: { color: r.band === "ok" ? C.green : C.forge } }, r.ratio.toFixed(2)), " · ref " + r.lo + "–" + r.hi + " · " + r.note)))),
+        React.createElement("div", { style: { ...S.hmNote, marginTop: 10, marginBottom: 0 } }, "Barbell lifts only (machine loads vary by brand). Reference ranges are common coaching rules of thumb — balance flags, not injury predictions.")));
+}
+function ProfilePanel({ data, unit }) {
+    const ids = [];
+    Object.keys(data.workouts).forEach((d) => (data.workouts[d].exercises || []).forEach((e) => { if (!ids.find((x) => x.id === e.id)) ids.push({ id: e.id, name: e.name }); }));
+    const rows = ids.map((x) => ({ ...x, p: strengthProfile(data, x.id) })).filter((x) => x.p).sort((a, b) => b.p.n - a.p.n);
+    return (React.createElement("div", { style: S.anWrap },
+        React.createElement("div", { style: { ...S.eyebrow, color: C.forge } }, "⚒ Strength-endurance profile"),
+        rows.length === 0 ? React.createElement("div", { style: S.hmNote }, "Needs a heavy set (1–5 reps) plus two higher-rep sets or Finishers on the same lift. Volume days and Finishers build this fast.") :
+            rows.slice(0, 8).map((r) => {
+                const col = r.p.label === "Balanced" ? C.green : C.forge;
+                const ex15 = r.p.E / (1 + 15 / 30);
+                return React.createElement("div", { key: r.id, style: S.lineItem },
+                    React.createElement("span", { style: S.lineKey }, r.name),
+                    React.createElement("span", { style: { ...S.lineVal, fontSize: 12.5, maxWidth: "62%" } },
+                        React.createElement("b", { style: { color: col } }, r.p.label), " · k " + r.p.k + " (std 30) · " + r.p.n + " pts" + (r.p.finN ? ", " + r.p.finN + " Finisher" + (r.p.finN > 1 ? "s" : "") : "") +
+                        " · 15 reps @ " + fmt(inUnit({ weight: ex15, unit: "kg" }, unit)) + " " + unit + " reads as " + fmt(inUnit({ weight: personalE1(ex15, 15, r.p.k), unit: "kg" }, unit)) + " " + unit + " 1RM for you"));
+            }),
+        React.createElement("div", { style: { ...S.hmNote, marginTop: 10, marginBottom: 0 } }, "Higher k = you hold reps well at lighter loads, so standard formulas over-estimate your 1RM from high-rep sets. Finishers are true failure sets and count double. Rep PRs not taken to failure make you look more strength-leaning than you are.")));
+}
+function DriversPanel({ data }) {
+    const r = bestDayDrivers(data);
+    return (React.createElement("div", { style: S.anWrap },
+        React.createElement("div", { style: { ...S.eyebrow, color: C.forge } }, "⚒ What drives your best days"),
+        !r.ready ? React.createElement(React.Fragment, null,
+            React.createElement("div", { style: S.hmNote }, "Warming up: " + r.n + " / 20 checked-in strength sessions with a comparable lift."),
+            React.createElement("div", { style: S.trophyBar }, React.createElement("div", { style: { ...S.trophyBarFill, width: Math.min(100, (r.n / 20) * 100) + "%" } })))
+            : r.factors.length === 0 ? React.createElement("div", { style: S.hmNote }, "Not enough variety yet — each factor needs 5+ days on both sides.")
+                : r.factors.map((f) => React.createElement("div", { key: f.key, style: S.lineItem },
+                    React.createElement("span", { style: S.lineKey }, f.label),
+                    React.createElement("span", { style: { ...S.lineVal, color: Math.abs(f.diff) < 1 ? C.dim : f.diff > 0 ? C.green : C.red } }, (f.diff > 0 ? "+" : "") + f.diff + "% top sets · " + f.nA + " vs " + f.nB + " days"))),
+        React.createElement("div", { style: { ...S.hmNote, marginTop: 10, marginBottom: 0 } }, "Compares your heavy top sets to your own recent best on each day. Correlation, not proof — differences under ~2% are noise.")));
+}
+// ===================== Seasons =====================
+const SEASON_GATE = { title: "Every Season goal", blurb: "Run Volume and Finisher-ladder Seasons as well as Strength, and keep a shelf of every Season badge you’ve earned." };
+function SeasonCard({ data, today, founder, onGate, onStart, onAbandon, onOpenReport }) {
+    const [confirm, setConfirm] = useState(false);
+    const se = data.season;
+    if (!se)
+        return (React.createElement("div", { style: S.anWrap },
+            React.createElement("div", { style: S.eyebrow }, "⚑ Seasons"),
+            React.createElement("div", { style: S.lockBlurb }, "Six weeks, one goal, a test week and a graded report card. Pick a goal to start today."),
+            React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" } }, Object.entries(SEASON_GOALS).map(([k, g]) => {
+                const locked = !founder && k !== "strength";
+                return React.createElement("button", { key: k, style: { ...S.typeOpt, padding: "9px 12px", ...(locked ? { opacity: 0.7 } : { color: C.forge, borderColor: C.forgeDeep }) }, onClick: () => (locked ? onGate(SEASON_GATE) : onStart(k)) }, (locked ? "⚒ " : g.icon + " ") + g.label);
+            }))));
+    const st = seasonStatus(se, today);
+    const g = SEASON_GOALS[se.goal];
+    return (React.createElement("div", { style: { ...S.anWrap, borderColor: C.forgeDeep } },
+        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline" } },
+            React.createElement("div", { style: { ...S.eyebrow, color: C.forge } }, "⚑ " + g.label + " Season"),
+            React.createElement("div", { style: { fontFamily: mono, fontSize: 12, color: C.dim } }, st.done ? "complete" : "week " + st.week + " / 6")),
+        React.createElement("div", { style: S.trophyBar }, React.createElement("div", { style: { ...S.trophyBarFill, width: Math.min(100, (st.day / 42) * 100) + "%", background: C.forge } })),
+        st.done
+            ? React.createElement("button", { style: { ...S.dropBtn, marginTop: 12 }, onClick: onOpenReport }, "Season complete — open your report card")
+            : React.createElement("div", { style: { ...S.lockTitle, fontSize: 15, marginTop: 10, color: st.isTest ? C.forge : C.chalk } }, g.weeks[st.week - 1]),
+        !st.done && React.createElement("button", { style: S.founderCodeLink, onClick: () => (confirm ? onAbandon() : setConfirm(true)) }, confirm ? "Tap again to abandon this Season" : "Abandon Season")));
+}
+function SeasonReport({ data, today, onBank, onClose }) {
+    const se = data.season;
+    const end = addDaysISO(se.start, 41);
+    const r = seasonReport(data, se, today < end ? today : end);
+    const g = SEASON_GOALS[se.goal];
+    const [hint, setHint] = useState("");
+    const text = "IRONLOG ⚑ " + g.label + " Season report: grade " + r.grade + "\n" + (r.metric > 0 ? "+" : "") + r.metric + " " + r.unitLabel + " across " + r.lifts + " lift" + (r.lifts === 1 ? "" : "s") + " · " + r.sessions + " sessions (" + r.perWeek + "/wk)";
+    return (React.createElement("div", { style: { ...S.sheetBackdrop, zIndex: 54 }, onClick: onClose },
+        React.createElement("div", { style: { ...S.dropCard, textAlign: "center" }, onClick: (e) => e.stopPropagation() },
+            React.createElement("div", { style: S.dropEyebrow }, "⚑ " + g.label + " Season · report card"),
+            React.createElement("div", { style: { fontFamily: mono, fontWeight: 700, fontSize: 72, color: C.forge, lineHeight: 1.1, margin: "10px 0", animation: "flare 0.9s ease" } }, r.grade),
+            React.createElement("div", { style: S.dropName }, (r.metric > 0 ? "+" : "") + r.metric + " " + r.unitLabel),
+            React.createElement("div", { style: S.dropLore }, (se.goal === "strength" ? "Average est. 1RM change on your top lifts" : se.goal === "volume" ? "Average best-session volume change on your top lifts" : "Average Finisher ladder gain per lift") + " · " + r.sessions + " sessions (" + r.perWeek + " a week). A “+” means 3+ sessions a week."),
+            React.createElement("button", { style: S.dropBtn, onClick: () => onBank(r) }, "Bank it — start fresh"),
+            React.createElement("button", { style: { ...S.hiitCtlDark, width: "100%", marginTop: 8 }, onClick: () => tryShare(text, setHint) }, "Share ↗"),
+            hint && React.createElement("div", { style: { ...S.shareHint, marginTop: 8 } }, hint))));
+}
+function SeasonShelf({ data, founder }) {
+    const done = (data.seasonsDone || []).slice().reverse();
+    if (!founder || !done.length)
+        return null;
+    return (React.createElement(React.Fragment, null,
+        React.createElement("div", { style: S.cabSect }, "Seasons ", React.createElement("span", { style: S.cabCount }, done.length + " banked")),
+        React.createElement("div", { style: S.trophyGrid }, done.map((x, i) => React.createElement("div", { key: i, style: { ...S.trophy, ...S.trophyOn } },
+            React.createElement("div", { style: { fontFamily: mono, fontWeight: 700, fontSize: 30, color: C.forge } }, x.grade),
+            React.createElement("div", { style: S.trophyName }, (SEASON_GOALS[x.goal] || {}).label + " Season"),
+            React.createElement("div", { style: S.trophySub }, shortDate(x.start) + " – " + shortDate(x.end) + " · " + (x.metric > 0 ? "+" : "") + x.metric + " " + x.unitLabel))))));
+}
+// ===================== Gauntlet =====================
+const GAUNTLET_GATE = { title: "The Finisher Gauntlet", blurb: "A weekly themed challenge: three Finishers on three different lifts in one session. Your combined reps are your score — beat last week’s." };
+function GauntletCard({ data, today, founder, onGate }) {
+    const ws = weekStartISO(today);
+    const gw = gauntletWeek(data, ws, today);
+    if (!founder)
+        return React.createElement(FounderLock, { title: gw.theme.label + " · this week", blurb: GAUNTLET_GATE.blurb, onOpen: () => onGate(GAUNTLET_GATE) });
+    const last = gauntletWeek(data, addDaysISO(ws, -7), null);
+    const td = gauntletDay(data, today, gw.theme);
+    return (React.createElement("div", { style: { ...S.anWrap, borderColor: C.forgeDeep } },
+        React.createElement("div", { style: { ...S.eyebrow, color: C.forge } }, "⚒ " + gw.theme.label + " · this week"),
+        React.createElement("div", { style: S.lockBlurb }, gw.theme.rule + " in one session. Score = combined reps."),
+        React.createElement("div", { style: S.anGrid },
+            React.createElement("div", { style: S.anStat }, React.createElement("div", { style: S.anStatBig }, Math.min(3, td.count) + "/3"), React.createElement("div", { style: S.anStatLab }, "today")),
+            React.createElement("div", { style: S.anStat }, React.createElement("div", { style: { ...S.anStatBig, color: C.forge } }, gw.best == null ? "—" : gw.best), React.createElement("div", { style: S.anStatLab }, "best this week")),
+            React.createElement("div", { style: S.anStat }, React.createElement("div", { style: S.anStatBig }, last.best == null ? "—" : last.best), React.createElement("div", { style: S.anStatLab }, "last week")))));
+}
+// ===================== Iron Wrapped =====================
+const WRAPPED_GATE = { title: "Wrapped: deep cuts", blurb: "Founders get an extra Wrapped slide: rep-range records, Finisher levels, Season grades and challenge wins for the period." };
+function WrappedStory({ data, unit, today, founder, onGate, onClose }) {
+    const [kind, setKind] = useState("quarter");
+    const [i, setI] = useState(0);
+    const [hint, setHint] = useState("");
+    const from = periodStart(today, kind);
+    const w = wrappedStats(data, from, today);
+    const y = today.slice(0, 4), q = Math.floor((Number(today.slice(5, 7)) - 1) / 3) + 1;
+    const period = kind === "year" ? y : "Q" + q + " " + y;
+    const vol = unit === "kg" ? w.volKg : w.volKg * KG2LB;
+    const arch = trainingArchetype(data, today);
+    const seasonsIn = (data.seasonsDone || []).filter((x) => x.end >= from && x.end <= today);
+    const slides = [
+        { eye: "Iron Wrapped", big: period, sub: "Your training, wrapped. Tap to continue." },
+        { eye: "You moved", big: fmt(vol / 1000) + " t", sub: (equivalent(w.volKg) || "") + (unit === "lb" ? " (thousand lb)" : "") },
+        { eye: "You showed up", big: w.sessions + "", sub: "sessions · " + w.sets.toLocaleString() + " sets · " + w.reps.toLocaleString() + " reps" + (w.favDay ? " · favourite day: " + w.favDay : "") },
+        { eye: "Biggest strength gains", big: w.gains.length ? "+" + w.gains[0].pct + "%" : "Baselines set", sub: w.gains.length ? w.gains.map((g) => g.name + " +" + g.pct + "%").join(" · ") : "Next period, your gains land here." },
+        { eye: "Most trained", big: w.topMuscles.length ? w.topMuscles[0][0] : "—", sub: w.topMuscles.map((m) => m[0] + " " + Math.round(m[1]) + " sets").join(" · ") },
+        { eye: "Under the bar", big: w.finBest ? w.finBest.reps + " reps" : w.cardioMin ? w.cardioMin + " min" : "—", sub: w.finBest ? "Best Finisher · " + w.finBest.name + (w.levels ? " · " + w.levels + " level-up" + (w.levels > 1 ? "s" : "") : "") : w.cardioMin ? "of cardio banked" : "Finishers and cardio show up here." },
+        { eye: "Your training style", big: arch.icon + " " + arch.name, sub: arch.desc },
+        founder
+            ? { eye: "⚒ Deep cuts", big: (w.won || 0) + " ⚔", sub: "challenges won · " + w.levels + " Finisher level-ups · " + (seasonsIn.length ? seasonsIn.map((x) => (SEASON_GOALS[x.goal] || {}).label + " " + x.grade).join(", ") + " Season" + (seasonsIn.length > 1 ? "s" : "") : "no Seasons banked") }
+            : { eye: "⚒ Deep cuts", big: "Founders only", sub: "Challenges won, Finisher levels and Season grades for the period.", gate: true },
+        { eye: "That’s a wrap", big: period, sub: w.sessions + " sessions · " + fmt(vol / 1000) + " t moved" + (w.gains.length ? " · " + w.gains[0].name + " +" + w.gains[0].pct + "%" : ""), share: true },
+    ];
+    const sl = slides[i];
+    const text = "IRONLOG 🎞 Iron Wrapped — " + period + "\n" + w.sessions + " sessions · " + fmt(vol / 1000) + " t moved · " + w.sets + " sets" + (w.gains.length ? "\nBiggest gain: " + w.gains[0].name + " +" + w.gains[0].pct + "%" : "") + "\nStyle: " + arch.icon + " " + arch.name;
+    const go = (d) => setI((x) => Math.max(0, Math.min(slides.length - 1, x + d)));
+    return (React.createElement("div", { style: { ...S.hiitOverlay, background: "linear-gradient(160deg,#2a1405 0%," + C.iron + " 70%)", justifyContent: "flex-start", padding: "16px 18px" } },
+        React.createElement("div", { style: { display: "flex", gap: 4, width: "100%", maxWidth: 460 } }, slides.map((_, k) => React.createElement("div", { key: k, style: { flex: 1, height: 3, borderRadius: 2, background: k <= i ? C.forge : "rgba(255,255,255,0.18)" } }))),
+        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", width: "100%", maxWidth: 460, marginTop: 10 } },
+            React.createElement("div", { style: { display: "flex", gap: 6 } }, [["quarter", "Quarter"], ["year", "Year"]].map(([k, l]) => React.createElement("button", { key: k, style: { ...S.typeOpt, ...(kind === k ? S.typeOptOn : {}) }, onClick: () => { setKind(k); setI(0); } }, l))),
+            React.createElement("button", { style: S.hiitCtl, onClick: onClose }, "✕")),
+        React.createElement("div", { key: kind + i, style: { flex: 1, width: "100%", maxWidth: 460, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", animation: "rise 0.3s ease", cursor: "pointer" }, onClick: (e) => { const r = e.currentTarget.getBoundingClientRect(); go(e.clientX - r.left < r.width / 3 ? -1 : 1); } },
+            React.createElement("div", { style: S.hiitPhase }, sl.eye),
+            React.createElement("div", { style: { ...S.hiitBig, fontSize: sl.big.length > 9 ? 44 : 84, margin: "14px 0", color: C.forge } }, sl.big),
+            React.createElement("div", { style: { ...S.hiitRound, textTransform: "none", letterSpacing: 0.3, fontSize: 16, lineHeight: 1.5, maxWidth: 360 } }, sl.sub)),
+        sl.gate && React.createElement("button", { style: { ...S.dropBtn, maxWidth: 320 }, onClick: () => onGate(WRAPPED_GATE) }, "⚒ Unlock deep cuts"),
+        sl.share && React.createElement("button", { style: { ...S.dropBtn, maxWidth: 320 }, onClick: () => tryShare(text, setHint) }, "Share your Wrapped ↗"),
+        hint && React.createElement("div", { style: { ...S.shareHint, marginTop: 8 } }, hint),
+        React.createElement("div", { style: { ...S.hiitRound, marginTop: 12, fontSize: 11 } }, "Tap right to continue · left to go back")));
 }
 // ---- Weekly sets per muscle ----
 const MUSCLE_GATE = { title: "Muscle volume detail", blurb: "See each muscle’s 4-week trend and exactly which lifts are driving it — so you can fix lagging muscles with precision." };
@@ -3278,6 +3503,328 @@ const isIOSBrowser = () => {
     }
 };
 const chTarget = (c, unit) => fmt(inUnit({ weight: c.w, unit: c.unit }, unit)) + " " + unit + " × " + c.reps;
+
+// ================= #3 Training load (Foster session-RPE) =================
+// Load = session RPE x minutes. Monotony = mean daily load / SD (7 days, rest = 0);
+// strain = weekly load x monotony. Foster flags monotony > 2.0 as a risk pattern.
+const hmToMin = (hm) => { const [h, m] = String(hm).split(":").map(Number); return h * 60 + m; };
+function sessionMinutes(day) {
+    if (!day)
+        return null;
+    if (day.time && day.endTime) {
+        const d = hmToMin(day.endTime) - hmToMin(day.time);
+        if (d >= 10 && d <= 300)
+            return { min: d, est: false };
+    }
+    const sets = (day.exercises || []).reduce((a, e) => a + e.sets.filter((x) => x.done).length, 0);
+    const cmin = (day.cardio || []).reduce((a, c) => a + (c.minutes || 0), 0);
+    const m = Math.round(sets * 2.5 + cmin); // ~2.5 min per set incl. rest when no clock time
+    return m > 0 ? { min: m, est: true } : null;
+}
+function dayLoad(data, d) {
+    const day = data.workouts[d];
+    if (!dayHasWork(day))
+        return 0;
+    const post = ((data.checkins || {})[d] || {}).post;
+    if (!post || !post.rpe)
+        return null; // trained, but no RPE logged
+    const sm = sessionMinutes(day);
+    return sm ? post.rpe * sm.min : null;
+}
+function trainingLoad(data, today) {
+    const curWS = weekStartISO(today);
+    const weeks = [];
+    for (let i = 5; i >= 0; i--) {
+        const ws = addDaysISO(curWS, -7 * i);
+        let load = 0, missing = 0, sessions = 0;
+        const daily = [];
+        weekDates(ws).forEach((d) => {
+            if (d > today)
+                return;
+            const l = dayLoad(data, d);
+            if (l === null) {
+                missing++;
+                daily.push(0);
+            }
+            else {
+                daily.push(l);
+                if (l > 0)
+                    sessions++;
+                load += l;
+            }
+        });
+        const full = i > 0 ? daily : daily.concat(Array(7 - daily.length).fill(0)).slice(0, daily.length);
+        const mean = full.reduce((a, b) => a + b, 0) / (full.length || 1);
+        const sd = Math.sqrt(full.reduce((a, b) => a + (b - mean) * (b - mean), 0) / (full.length || 1));
+        const monotony = sessions >= 2 && sd > 0 ? Math.round((mean / sd) * 100) / 100 : null;
+        weeks.push({ ws, load: Math.round(load), sessions, missing, monotony, strain: monotony ? Math.round(load * monotony) : null });
+    }
+    const prev = weeks.slice(0, 5).filter((w) => w.load > 0);
+    const avg4 = prev.length ? Math.round(prev.slice(-4).reduce((a, w) => a + w.load, 0) / Math.min(4, prev.length)) : 0;
+    return { weeks, cur: weeks[5], avg4 };
+}
+
+// ================= #6 Strength balance ratios =================
+// Barbell lifts only — machine and dumbbell loads aren't comparable across gyms/brands.
+const BALANCE = [
+    { key: "rowbench", label: "Row : Bench", a: "row", b: "bench", lo: 0.7, hi: 1.0, low: "Pulling lags pressing — add rowing volume", high: "Pressing lags pulling" },
+    { key: "ohpbench", label: "Overhead : Bench", a: "ohp", b: "bench", lo: 0.55, hi: 0.75, low: "Overhead press lags bench", high: "Bench lags overhead press" },
+    { key: "benchsquat", label: "Bench : Squat", a: "bench", b: "squat", lo: 0.6, hi: 0.85, low: "Upper body lags legs", high: "Legs lag upper body" },
+    { key: "deadsquat", label: "Deadlift : Squat", a: "dead", b: "squat", lo: 1.1, hi: 1.3, low: "Hinge lags squat — posterior chain", high: "Squat lags deadlift" },
+];
+function bestStrengthE1(data, uptoIso, fromIso) {
+    const best = {};
+    Object.keys(data.workouts).forEach((d) => {
+        if ((uptoIso && d > uptoIso) || (fromIso && d < fromIso))
+            return;
+        (data.workouts[d].exercises || []).forEach((e) => e.sets.forEach((st) => {
+            if (!isWorkDone(st) || st.finisher || (st.reps || 0) <= 0 || (st.reps || 0) > 12)
+                return;
+            const v = e1rm(st, "kg");
+            if (v > (best[e.id] || 0))
+                best[e.id] = v;
+        }));
+    });
+    return best;
+}
+function balanceRatios(data, today) {
+    const best = bestStrengthE1(data, today, addDaysISO(today, -120));
+    return BALANCE.map((b) => {
+        const A = best[b.a], B = best[b.b];
+        if (!A || !B)
+            return { ...b, ratio: null, missing: !A ? b.a : b.b };
+        const ratio = Math.round((A / B) * 100) / 100;
+        const band = ratio < b.lo ? "low" : ratio > b.hi ? "high" : "ok";
+        return { ...b, ratio, band, note: band === "low" ? b.low : band === "high" ? b.high : "Within the common reference range" };
+    });
+}
+
+// ================= #2 Strength-endurance profile =================
+// Fits a personal Epley constant k (standard k = 30): e1RM = w x (1 + reps / k).
+// Anchor = best e1RM from sets of 1–5 reps; data points = Finishers (true failure,
+// weighted x2) + heaviest set at each rep count 6+. Higher k = you hold reps well
+// at lighter loads (endurance-leaning); lower k = strength-leaning.
+function strengthProfile(data, exId) {
+    const all = [];
+    Object.keys(data.workouts).forEach((d) => (data.workouts[d].exercises || []).forEach((e) => {
+        if (e.id !== exId)
+            return;
+        e.sets.forEach((st) => { if (isWorkDone(st) && (st.reps || 0) > 0 && inUnit(st, "kg") > 0) all.push({ w: inUnit(st, "kg"), r: st.reps, fin: !!st.finisher }); });
+    }));
+    const low = all.filter((x) => !x.fin && x.r <= 5);
+    if (!low.length)
+        return null;
+    const E = Math.max(...low.map((x) => x.w * (1 + x.r / 30)));
+    const byR = {};
+    all.filter((x) => !x.fin && x.r >= 6).forEach((x) => { if (!byR[x.r] || x.w > byR[x.r].w) byR[x.r] = x; });
+    const pts = [...Object.values(byR), ...all.filter((x) => x.fin)];
+    let ksum = 0, wsum = 0, n = 0, finN = 0;
+    pts.forEach((x) => {
+        if (x.w >= E)
+            return;
+        const k = x.r / (E / x.w - 1);
+        const kk = Math.max(15, Math.min(60, k));
+        const wt = x.fin ? 2 : 1;
+        ksum += kk * wt;
+        wsum += wt;
+        n++;
+        if (x.fin)
+            finN++;
+    });
+    if (n < 2)
+        return null;
+    const k = Math.round((ksum / wsum) * 10) / 10;
+    const index = k / 30;
+    const label = index >= 1.12 ? "Endurance-leaning" : index <= 0.88 ? "Strength-leaning" : "Balanced";
+    return { E, k, index, label, n, finN };
+}
+const personalE1 = (w, r, k) => w * (1 + r / (k || 30));
+
+// ================= #5 What drives your best days =================
+// Day performance = mean over strength-focus lifts of (day best e1RM / prior 60-day best).
+// Then compares days split by each factor. Correlation, not causation.
+function dayPerformance(data) {
+    const dates = Object.keys(data.workouts).sort();
+    const out = [];
+    dates.forEach((d) => {
+        const pre = ((data.checkins || {})[d] || {}).pre;
+        if (!pre)
+            return;
+        const rels = [];
+        (data.workouts[d].exercises || []).forEach((e) => {
+            const work = e.sets.filter((st) => isWorkDone(st) && !st.finisher && (st.reps || 0) > 0 && (st.reps || 0) <= 12 && inUnit(st, "kg") > 0);
+            if (!work.length)
+                return;
+            const topW = Math.max(...work.map((st) => inUnit(st, "kg")));
+            const minR = Math.min(...work.filter((st) => inUnit(st, "kg") === topW).map((st) => st.reps));
+            if (sessionFocus(data, d, e, minR) !== "strength")
+                return;
+            const today = Math.max(...work.map((st) => e1rm(st, "kg")));
+            const prior = bestStrengthE1(data, addDaysISO(d, -1), addDaysISO(d, -60))[e.id];
+            if (prior)
+                rels.push(today / prior);
+        });
+        if (!rels.length)
+            return;
+        const day = data.workouts[d];
+        const prevDates = dates.filter((x) => x < d && dayHasWork(data.workouts[x]));
+        const gap = prevDates.length ? Math.round((fromISO(d) - fromISO(prevDates[prevDates.length - 1])) / 86400000) : null;
+        out.push({ d, perf: rels.reduce((a, b) => a + b, 0) / rels.length, pre, time: day.time || null, gap });
+    });
+    return out;
+}
+const DRIVER_FACTORS = [
+    { key: "sleep", label: "Slept well (4–5)", test: (x) => x.pre.sleep >= 4, need: (x) => !!x.pre.sleep },
+    { key: "energy", label: "High energy (4–5)", test: (x) => x.pre.energy >= 4, need: (x) => !!x.pre.energy },
+    { key: "muscles", label: "Fresh muscles (4–5)", test: (x) => (x.pre.muscles != null ? x.pre.muscles : 6 - (x.pre.soreness || 3)) >= 4, need: () => true },
+    { key: "morning", label: "Trained before noon", test: (x) => hmToMin(x.time) < 720, need: (x) => !!x.time },
+    { key: "rested", label: "2+ days since last session", test: (x) => x.gap >= 2, need: (x) => x.gap != null },
+];
+function bestDayDrivers(data) {
+    const days = dayPerformance(data);
+    if (days.length < 20)
+        return { ready: false, n: days.length };
+    const avg = (a) => a.reduce((x, y) => x + y.perf, 0) / a.length;
+    const res = [];
+    DRIVER_FACTORS.forEach((f) => {
+        const pool = days.filter(f.need);
+        const A = pool.filter(f.test), B = pool.filter((x) => !f.test(x));
+        if (A.length < 5 || B.length < 5)
+            return;
+        res.push({ key: f.key, label: f.label, diff: Math.round((avg(A) - avg(B)) * 1000) / 10, nA: A.length, nB: B.length });
+    });
+    res.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
+    return { ready: true, n: days.length, factors: res };
+}
+
+// ================= #8 Seasons (6-week blocks) =================
+const SEASON_GOALS = {
+    strength: { label: "Strength", icon: "◎", weeks: ["Build: heavy days, chase the gold targets", "Build: add a rep where you can", "Push: weights up when primed", "Push: heavy and crisp", "Peak: lower sets, keep it heavy", "Test week: go for top-set PRs"] },
+    volume: { label: "Volume", icon: "≋", weeks: ["Base: settle into 12–15 rep work", "Build: add a set per muscle", "Build: hit 10–20 hard sets per muscle", "Push: beat last week’s session volume", "Push: keep sets close to failure", "Test week: chase session-volume records"] },
+    finisher: { label: "Finisher ladder", icon: "⚒", weeks: ["Set baselines on 3+ lifts", "Climb: +1 rep anywhere", "Climb: take the Gauntlet", "Climb: chase the next tier", "Recover-and-push: quality reps only", "Test week: all-out Finishers"] },
+};
+function seasonSnapshot(data, uptoIso) {
+    const e1 = bestStrengthE1(data, uptoIso);
+    const vol = {};
+    Object.keys(data.workouts).forEach((d) => {
+        if (uptoIso && d > uptoIso)
+            return;
+        const per = {};
+        (data.workouts[d].exercises || []).forEach((e) => e.sets.forEach((st) => { if (isWorkDone(st)) per[e.id] = (per[e.id] || 0) + inUnit(st, "kg") * (st.reps || 0) * sideMult(st); }));
+        Object.keys(per).forEach((id) => { if (per[id] > (vol[id] || 0)) vol[id] = per[id]; });
+    });
+    const fin = {};
+    Object.entries(data.finishers || {}).forEach(([id, r]) => { fin[id] = ((r.level || 1) - 1) * FIN_FORGED + (r.best || 0); });
+    return { e1, vol, fin };
+}
+function seasonStatus(season, today) {
+    const day = Math.round((fromISO(today) - fromISO(season.start)) / 86400000);
+    const week = Math.min(6, Math.floor(day / 7) + 1);
+    return { day, week, isTest: week === 6, done: day >= 42 };
+}
+function seasonReport(data, season, endIso) {
+    const base = season.base, now = seasonSnapshot(data, endIso);
+    const pick = (b, n) => Object.keys(b).filter((id) => n[id] != null).sort((x, y) => b[y] - b[x]).slice(0, 3);
+    let metric = 0, used = [];
+    if (season.goal === "strength") {
+        used = pick(base.e1, now.e1);
+        metric = used.length ? used.reduce((a, id) => a + (now.e1[id] / base.e1[id] - 1), 0) / used.length * 100 : 0;
+    }
+    else if (season.goal === "volume") {
+        used = pick(base.vol, now.vol);
+        metric = used.length ? used.reduce((a, id) => a + (now.vol[id] / base.vol[id] - 1), 0) / used.length * 100 : 0;
+    }
+    else {
+        used = Object.keys(now.fin);
+        metric = used.length ? used.reduce((a, id) => a + (now.fin[id] - (base.fin[id] || 0)), 0) / used.length : 0;
+    }
+    const T = { strength: [5, 2.5, 0], volume: [15, 7.5, 0], finisher: [5, 2, 0] }[season.goal];
+    const grade = metric >= T[0] ? "A" : metric >= T[1] ? "B" : metric >= T[2] ? "C" : "D";
+    const sessions = Object.keys(data.workouts).filter((d) => d >= season.start && d <= endIso && dayHasWork(data.workouts[d])).length;
+    const perWeek = Math.round((sessions / 6) * 10) / 10;
+    return { metric: Math.round(metric * 10) / 10, unitLabel: season.goal === "finisher" ? "ladder reps" : "%", grade: grade + (perWeek >= 3 && grade !== "D" ? "+" : ""), sessions, perWeek, lifts: used.length };
+}
+
+// ================= #10 Finisher Gauntlet =================
+// Three Finishers on three different qualifying lifts in one session; score = their reps.
+// Theme rotates weekly (seeded from the week, same for everyone).
+const GAUNTLET_THEMES = [
+    { k: "open", label: "Open Gauntlet", rule: "Any three Finishers", test: () => true },
+    { k: "upper", label: "Upper Gauntlet", rule: "Three upper-body Finishers", test: (e) => ["Chest", "Back", "Shoulders", "Arms"].includes(e.category) },
+    { k: "lower", label: "Lower Gauntlet", rule: "Three leg Finishers", test: (e) => e.category === "Legs" },
+    { k: "push", label: "Push Gauntlet", rule: "Three pressing / chest / delt / triceps Finishers", test: (e) => { const m = musclesFor(e); return m.Chest === 1 || m.Shoulders === 1 || m.Triceps === 1; } },
+    { k: "pull", label: "Pull Gauntlet", rule: "Three back / biceps Finishers", test: (e) => { const m = musclesFor(e); return m.Back === 1 || m.Biceps === 1; } },
+];
+const gauntletTheme = (ws) => GAUNTLET_THEMES[hashISO("g" + ws) % GAUNTLET_THEMES.length];
+function gauntletDay(data, d, theme) {
+    const day = data.workouts[d];
+    if (!day)
+        return { count: 0, score: null };
+    const per = {};
+    (day.exercises || []).forEach((e) => {
+        if (!theme.test(e))
+            return;
+        e.sets.forEach((st) => { if (st.finisher && !st.challenge && st.done) per[e.id] = Math.max(per[e.id] || 0, st.reps || 0); });
+    });
+    const reps = Object.values(per).sort((a, b) => b - a);
+    return { count: reps.length, score: reps.length >= 3 ? reps[0] + reps[1] + reps[2] : null, partial: reps.slice(0, 3).reduce((a, b) => a + b, 0) };
+}
+function gauntletWeek(data, ws, today) {
+    const theme = gauntletTheme(ws);
+    let best = null, bestDay = null;
+    weekDates(ws).forEach((d) => {
+        if (today && d > today)
+            return;
+        const g = gauntletDay(data, d, theme);
+        if (g.score != null && (best == null || g.score > best)) {
+            best = g.score;
+            bestDay = d;
+        }
+    });
+    return { theme, best, bestDay };
+}
+
+// ================= #9 Iron Wrapped =================
+function periodStart(today, kind) {
+    const y = Number(today.slice(0, 4)), m = Number(today.slice(5, 7));
+    if (kind === "year")
+        return y + "-01-01";
+    const qm = Math.floor((m - 1) / 3) * 3 + 1;
+    return y + "-" + pad(qm) + "-01";
+}
+function wrappedStats(data, fromIso, toIso) {
+    const dates = Object.keys(data.workouts).filter((d) => d >= fromIso && d <= toIso && dayHasWork(data.workouts[d])).sort();
+    let volKg = 0, sets = 0, reps = 0, cardioMin = 0, finBest = null, levels = 0;
+    const dow = [0, 0, 0, 0, 0, 0, 0];
+    dates.forEach((d) => {
+        dow[dayIdx(d)]++;
+        const day = data.workouts[d];
+        (day.exercises || []).forEach((e) => e.sets.forEach((st) => {
+            if (!isWorkDone(st))
+                return;
+            volKg += inUnit(st, "kg") * (st.reps || 0) * sideMult(st);
+            sets++;
+            reps += (st.reps || 0) * sideMult(st);
+            if (st.finisher && !st.challenge) {
+                if (!finBest || st.reps > finBest.reps)
+                    finBest = { reps: st.reps, name: e.name };
+                if (st.reps >= FIN_FORGED)
+                    levels++;
+            }
+        }));
+        (day.cardio || []).forEach((c) => { cardioMin += c.minutes || 0; });
+    });
+    const before = bestStrengthE1(data, addDaysISO(fromIso, -1));
+    const during = bestStrengthE1(data, toIso, fromIso);
+    const names = {};
+    Object.keys(data.workouts).forEach((d) => (data.workouts[d].exercises || []).forEach((e) => { names[e.id] = e.name; }));
+    const gains = Object.keys(during).filter((id) => before[id] && during[id] > before[id]).map((id) => ({ id, name: names[id], pct: Math.round((during[id] / before[id] - 1) * 1000) / 10 })).sort((a, b) => b.pct - a.pct).slice(0, 3);
+    const ms = muscleSets(data, (() => { const out = []; let d = fromIso; while (d <= toIso) { out.push(d); d = addDaysISO(d, 1); } return out; })()).sets;
+    const topMuscles = Object.entries(ms).filter((x) => x[1] > 0).sort((a, b) => b[1] - a[1]).slice(0, 3);
+    const won = (data.challenges || []).filter((c) => c.status === "won" && c.resolvedAt >= fromIso && c.resolvedAt <= toIso).length;
+    const favDay = dates.length ? ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"][dow.indexOf(Math.max(...dow))] : null;
+    return { sessions: dates.length, volKg, sets, reps, cardioMin, favDay, gains, topMuscles, finBest, levels, won };
+}
 // CD6 — scarcity. One limited-edition badge per calendar month. Earn it inside
 // the month or it is gone for good — the cabinet keeps the gap.
 const MONTH_BADGE_POOL = [
@@ -3746,7 +4293,7 @@ function ShareActions({ text }) {
         React.createElement("div", { style: S.shareHint }, hint)));
 }
 /* ---------------- Week summary (a shareable screen) ---------------- */
-function WeekView({ data, unit, today, onShareMonth, founder, onGate, onPaste, onAddLift, onDismiss }) {
+function WeekView({ data, unit, today, onShareMonth, founder, onGate, onPaste, onAddLift, onDismiss, onStartSeason, onAbandonSeason, onOpenReport, onWrapped }) {
     const chPanel = React.createElement(ChallengesPanel, { data: data, unit: unit, onPaste: onPaste, onAddLift: onAddLift, onDismiss: onDismiss });
     const ws = weekStartISO(today);
     const days = weekDates(ws);
@@ -3774,9 +4321,10 @@ function WeekView({ data, unit, today, onShareMonth, founder, onGate, onPaste, o
         (equiv ? `That's ${equiv} of total volume.` : "");
     return (React.createElement("div", null,
         React.createElement(ForgePanel, { fs: fs, unit: unit, today: today, data: data }),
-        React.createElement(DeloadPanel, { sig: deloadSignal(data, today), founder: founder, onGate: onGate }),
-        React.createElement(MusclePanel, { data: data, unit: unit, today: today, founder: founder, onGate: onGate }),
+        React.createElement(SeasonCard, { data: data, today: today, founder: founder, onGate: onGate, onStart: onStartSeason, onAbandon: onAbandonSeason, onOpenReport: onOpenReport }),
+        React.createElement(GauntletCard, { data: data, today: today, founder: founder, onGate: onGate }),
         chPanel,
+        React.createElement("button", { style: { ...S.monthBtn, marginTop: 0, marginBottom: 18, color: C.forge, borderColor: C.forgeDeep } , onClick: onWrapped }, "\uD83C\uDF9E Iron Wrapped \u2014 your quarter & year in iron"),
         st.sessions === 0 && (React.createElement("div", { style: S.quietWeek }, "No sessions logged this week yet \u2014 your streak holds as long as you train once before the week is out.")),
         st.sessions > 0 && (React.createElement(React.Fragment, null,
             React.createElement("div", { style: S.shareCard },
@@ -4259,6 +4807,7 @@ function CabinetView({ data, unit, today, onSetBodyweight, onImport, onBackedUp,
                         unit))),
             bwKg > 0 && board.some(b => strengthPct(b.id, b.best, bwKg) !== null) && (React.createElement("div", { style: S.pctDisclaimer }, "Percentiles are estimates vs. the adult male population (incl. non-lifters), based on bodyweight-ratio strength standards.")),
             !bwSet && board.some(b => EX_CURVE_MAP[b.id]) && (React.createElement("div", { style: S.pctDisclaimer }, "Set your bodyweight above to see how your lifts compare to the adult male population.")))),
+        React.createElement(SeasonShelf, { data: data, founder: founder }),
         React.createElement(FinisherBoard, { data: data, unit: unit, founder: founder, onGate: onGate, onToggle: onToggleFinisher }),
         React.createElement(BackupPanel, { data: data, onImport: onImport, onBackedUp: onBackedUp }),
         React.createElement(FounderCard, { founder: founder, onBuy: onBuyFounder, onRedeem: onRedeemFounder, price: FOUNDER.price }),
