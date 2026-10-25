@@ -50,7 +50,7 @@ const C = {
 const STEP = { kg: 2.5, lb: 5 };
 // Bump this whenever we ship. Shown in Cabinet so the live build is verifiable
 // at a glance — stale service-worker caches otherwise look identical.
-const BUILD = "2026.10.25e";
+const BUILD = "2026.10.25f";
 // ---- Founder unlock (one-time supporter tier) ----
 // FILL THESE IN once your Stripe payment link is live:
 //  - url:   the Stripe Payment Link. Set its "after payment" redirect to
@@ -229,6 +229,9 @@ function IronLog() {
     const [workoutsOpen, setWorkoutsOpen] = useState(false);
     const [suggestOpen, setSuggestOpen] = useState(false);
     const [guideOpen, setGuideOpen] = useState(false);
+    const [incomingCh, setIncomingCh] = useState(null); // challenge just received via link
+    const [shareCh, setShareCh] = useState(null); // challenge being created
+    const [pendingAdd, setPendingAdd] = useState(null); // lift to add once Today is on the real date
     const [finRun, setFinRun] = useState(null); // active Finisher challenge
     const [gate, setGate] = useState(null); // { title, blurb } for a locked Founder feature
     const [dropReveal, setDropReveal] = useState(null); // relic id just dropped
@@ -256,6 +259,12 @@ function IronLog() {
             if (params.get("unlock") === FOUNDER.token) {
                 setData((d) => ({ ...d, founder: true }));
                 setFounderWelcome(true);
+                history.replaceState(null, "", location.pathname);
+            }
+            if (params.get("c")) {
+                const ch = decodeChallenge("?c=" + params.get("c"));
+                if (ch)
+                    receiveChallenge(ch);
                 history.replaceState(null, "", location.pathname);
             }
         }
@@ -340,6 +349,35 @@ function IronLog() {
         w[logDate] = day;
         return { ...prev, workouts: w };
     });
+    // ---- Challenges ----
+    function receiveChallenge(ch) {
+        setData((p) => {
+            const list = [...(p.challenges || [])];
+            if (list.some((x) => x.key === ch.key))
+                return p;
+            list.unshift({ ...ch, id: uid(), status: "open", at: localISO(new Date()), best: null });
+            return { ...p, challenges: list.slice(0, 30) };
+        });
+        setIncomingCh(ch);
+    }
+    const receiveFromText = (text) => {
+        const ch = decodeChallenge(text);
+        if (!ch)
+            return false;
+        receiveChallenge(ch);
+        return true;
+    };
+    const dismissChallenge = (id) => setData((p) => ({ ...p, challenges: (p.challenges || []).filter((c) => c.id !== id) }));
+    const addChallengeLift = (c) => {
+        const item = [...LIB, ...(data.custom || [])].find((x) => x.id === c.exId);
+        setIncomingCh(null);
+        setView("log");
+        if (!item)
+            return;
+        if (logDate !== today)
+            setLogDate(today);
+        setPendingAdd(item);
+    };
     const addExercise = (item) => {
         const uniFlag = !!(item.uni || item.unilateral);
         const prefill = lastSetsFor(item.id);
@@ -352,6 +390,15 @@ function IronLog() {
         });
         setPickerOpen(false);
     };
+    useEffect(() => {
+        if (!pendingAdd || logDate !== today)
+            return;
+        const day = data.workouts[today];
+        const act = (day && day.activeSession) || 0;
+        if (!(day && day.exercises.some((e) => e.id === pendingAdd.id && (e.session || 0) === act)))
+            addExercise(pendingAdd);
+        setPendingAdd(null);
+    }, [pendingAdd, logDate]);
     const addCustom = (name, category, uni) => {
         const item = { id: "c_" + uid(), name: name.trim(), category, uni: !!uni };
         setData((p) => ({ ...p, custom: [...(p.custom || []), item] }));
@@ -488,6 +535,15 @@ function IronLog() {
     // Records the Finisher: appends the set to the exercise, updates the lift's record,
     // levels the weight on Forged, flags the day for the drop bonus on a record.
     const completeFinisher = (run, reps) => {
+        if (run.challenge) {
+            const c = run.challenge;
+            updateEx(run.exUid, (e) => {
+                e.sets.push({ weight: c.w, reps, unit: c.unit, done: true, warmup: false, finisher: true, challenge: true, challengeId: c.id, side: e.unilateral ? "B" : null });
+            });
+            const won = reps > c.reps;
+            setData((p) => ({ ...p, challenges: (p.challenges || []).map((x) => (x.id === c.id ? { ...x, best: Math.max(x.best || 0, reps), ...(won ? { status: "won", resolvedAt: logDate } : {}) } : x)) }));
+            return { challenge: true, reps, target: c.reps, from: c.from, won, draw: reps === c.reps, w: c.w, unit: c.unit, name: run.name, exId: run.exId };
+        }
         const prev = (data.finishers || {})[run.exId];
         const out = finisherOutcome(prev, reps, run.w, run.unit, run.name);
         updateEx(run.exUid, (e) => {
@@ -612,8 +668,13 @@ function IronLog() {
         // Rest fires the instant a working set is ticked. A PR card (if any) sits
         // on top of the already-counting timer, so dismissing it reveals the clock.
         beginRest();
-        if (tier)
-            setPrPop({ tier, name: ex.name, w: fmt(inUnit(set, unit)), reps: set.reps || 0, ...extra });
+        const beat = (data.challenges || []).find((c) => c.status === "open" && c.t === "pr" && c.exId === ex.id && inUnit(set, c.unit) >= c.w - 0.01 && (set.reps || 0) >= c.reps);
+        if (beat) {
+            setData((p) => ({ ...p, challenges: (p.challenges || []).map((c) => (c.id === beat.id ? { ...c, status: "won", best: set.reps, resolvedAt: logDate } : c)) }));
+            setPrPop({ tier: "challenge", name: ex.name, w: fmt(inUnit(set, unit)), reps: set.reps || 0, from: beat.from, target: chTarget(beat, unit), exId: ex.id, wNum: r1(inUnit(set, unit)) });
+        }
+        else if (tier)
+            setPrPop({ tier, name: ex.name, w: fmt(inUnit(set, unit)), reps: set.reps || 0, ...extra, exId: ex.id, wNum: r1(inUnit(set, unit)) });
     };
     const finishSession = () => {
         flushSave();
@@ -713,6 +774,8 @@ function IronLog() {
         founder: !!obj.founder,
         finishers: obj.finishers && typeof obj.finishers === "object" ? obj.finishers : {},
         finisherOff: !!obj.finisherOff,
+        handle: typeof obj.handle === "string" ? obj.handle.slice(0, 24) : "",
+        challenges: Array.isArray(obj.challenges) ? obj.challenges.slice(0, 30) : [],
     });
     // recent exercise ids across history, newest first
     const recentIds = (() => {
@@ -744,14 +807,16 @@ function IronLog() {
                 React.createElement(Tab, { active: view === "week", onClick: () => setView("week") }, "Week"),
                 React.createElement(Tab, { active: view === "progress", onClick: () => setView("progress") }, "Progress"),
                 React.createElement(Tab, { active: view === "cabinet", onClick: () => setView("cabinet") }, "Cabinet"))),
-        React.createElement("main", { style: S.main }, !loaded ? (React.createElement("div", { style: S.loading }, "Loading the rack\u2026")) : view === "log" ? (React.createElement(LogView, { dateLabel: headDate(logDate), exercises: logEx, todayExercises: todayEx, unit: unit, data: data, today: today, logDate: logDate, onChangeDate: setLogDate, dayTime: ((_c = data.workouts[logDate]) === null || _c === void 0 ? void 0 : _c.time) || "", onChangeTime: setDayTime, restMarked: restMarked, restKind: restKind, onRest: markRestDay, onUndoRest: clearRestDay, onAdd: () => setPickerOpen(true), onSetDone: handleSetDone, onRestPref: setRestPref, onLogBW: logBW, onLogCheckin: logCheckin, cardio: ((_d = data.workouts[logDate]) === null || _d === void 0 ? void 0 : _d.cardio) || [], onAddCardio: () => setCardioOpen(true), updateCardio: updateCardio, removeCardio: removeCardio, onOpenWorkouts: () => setWorkoutsOpen(true), onSuggest: () => setSuggestOpen(true), hasTemplates: (data.templates || []).length > 0, updateEx: updateEx, removeEx: removeEx, startRest: (s) => setRest({ seconds: s, total: s }), onShare: finishSession, freezeAvail: freezeAvail, onFreeze: useFreeze, activeSession: ((data.workouts[logDate] || {}).activeSession) || 0, sessionFinished: ((data.workouts[logDate] || {}).finished) || {}, onStartAnother: startAnotherWorkout, founder: !!data.founder, onGate: setGate, onFinisher: setFinRun })) : view === "week" ? (React.createElement(WeekView, { data: data, unit: unit, today: today, onShareMonth: (m) => setShareMonth(m) })) : view === "cabinet" ? (React.createElement(CabinetView, { data: data, unit: unit, today: today, onSetBodyweight: setBodyweight, onImport: importData, onBackedUp: () => setData((p) => ({ ...p, lastBackup: Date.now() })), founder: data.founder, onBuyFounder: buyFounder, onRedeemFounder: redeemFounder, onGate: setGate, onToggleFinisher: () => setData((p) => ({ ...p, finisherOff: !p.finisherOff })) })) : (React.createElement(ProgressView, { data: data, unit: unit, progId: progId, setProgId: setProgId, onSetInjury: setInjury, founder: !!data.founder, onGate: setGate }))),
+        React.createElement("main", { style: S.main }, !loaded ? (React.createElement("div", { style: S.loading }, "Loading the rack\u2026")) : view === "log" ? (React.createElement(LogView, { dateLabel: headDate(logDate), exercises: logEx, todayExercises: todayEx, unit: unit, data: data, today: today, logDate: logDate, onChangeDate: setLogDate, dayTime: ((_c = data.workouts[logDate]) === null || _c === void 0 ? void 0 : _c.time) || "", onChangeTime: setDayTime, restMarked: restMarked, restKind: restKind, onRest: markRestDay, onUndoRest: clearRestDay, onAdd: () => setPickerOpen(true), onSetDone: handleSetDone, onRestPref: setRestPref, onLogBW: logBW, onLogCheckin: logCheckin, cardio: ((_d = data.workouts[logDate]) === null || _d === void 0 ? void 0 : _d.cardio) || [], onAddCardio: () => setCardioOpen(true), updateCardio: updateCardio, removeCardio: removeCardio, onOpenWorkouts: () => setWorkoutsOpen(true), onSuggest: () => setSuggestOpen(true), hasTemplates: (data.templates || []).length > 0, updateEx: updateEx, removeEx: removeEx, startRest: (s) => setRest({ seconds: s, total: s }), onShare: finishSession, freezeAvail: freezeAvail, onFreeze: useFreeze, activeSession: ((data.workouts[logDate] || {}).activeSession) || 0, sessionFinished: ((data.workouts[logDate] || {}).finished) || {}, onStartAnother: startAnotherWorkout, founder: !!data.founder, onGate: setGate, onFinisher: setFinRun, onGoWeek: () => setView("week") })) : view === "week" ? (React.createElement(WeekView, { data: data, unit: unit, today: today, founder: !!data.founder, onGate: setGate, onPaste: receiveFromText, onAddLift: addChallengeLift, onDismiss: dismissChallenge, onShareMonth: (m) => setShareMonth(m) })) : view === "cabinet" ? (React.createElement(CabinetView, { data: data, unit: unit, today: today, onSetBodyweight: setBodyweight, onImport: importData, onBackedUp: () => setData((p) => ({ ...p, lastBackup: Date.now() })), founder: data.founder, onBuyFounder: buyFounder, onRedeemFounder: redeemFounder, onGate: setGate, onToggleFinisher: () => setData((p) => ({ ...p, finisherOff: !p.finisherOff })) })) : (React.createElement(ProgressView, { data: data, unit: unit, progId: progId, setProgId: setProgId, onSetInjury: setInjury, founder: !!data.founder, onGate: setGate }))),
         guideOpen && (React.createElement(GuideSheet, { onClose: () => setGuideOpen(false) })),
         loaded && view === "log" && !data.guideSeen && (React.createElement(GuidePrompt, { onOpen: openGuide, onDismiss: markGuideSeen })),
-        finRun && (React.createElement(FinisherRun, { run: finRun, unit: unit, onComplete: (reps) => completeFinisher(finRun, reps), onClose: () => setFinRun(null) })),
+        finRun && (React.createElement(FinisherRun, { run: finRun, unit: unit, onComplete: (reps) => completeFinisher(finRun, reps), onClose: () => setFinRun(null), onChallenge: (c) => { setFinRun(null); setShareCh(c); } })),
+        incomingCh && (React.createElement(ChallengeIncoming, { ch: incomingCh, unit: unit, onAdd: () => addChallengeLift(incomingCh), onClose: () => setIncomingCh(null) })),
+        shareCh && (React.createElement(ChallengeShare, { payload: shareCh, unit: unit, handle: data.handle || "", onSaveHandle: (h) => setData((p) => ({ ...p, handle: h })), onClose: () => setShareCh(null) })),
         gate && (React.createElement(FounderGate, { gate: gate, price: FOUNDER.price, onBuy: () => { buyFounder(); }, onCode: () => { setGate(null); setView("cabinet"); }, onClose: () => setGate(null) })),
         founderWelcome && (React.createElement(FounderWelcome, { onClose: () => setFounderWelcome(false) })),
         coffeeAsk && (React.createElement(CoffeeAsk, { ask: coffeeAsk, onPick: (action) => { if (action === "never") markCoffeeAsk("never"); else markCoffeeAsk(coffeeAsk.key); setCoffeeAsk(null); } })),
-        prPop && (React.createElement(PRPop, { pop: prPop, unit: unit, onClose: () => setPrPop(null) })),
+        prPop && (React.createElement(PRPop, { pop: prPop, unit: unit, onClose: () => setPrPop(null), onChallenge: (c) => { setPrPop(null); setShareCh(c); } })),
         postCheckinOpen && (React.createElement(PostCheckin, { existing: (_e = (data.checkins || {})[logDate]) === null || _e === void 0 ? void 0 : _e.post, onDone: afterPostCheckin, onCancel: () => setPostCheckinOpen(false) })),
         dropReveal && (React.createElement(DropReveal, { relicId: dropReveal, onClose: () => { setDropReveal(null); setShareDay(logDate); } })),
         cardioOpen && (React.createElement("div", { style: S.sheetBackdrop, onClick: () => setCardioOpen(false) },
@@ -779,7 +844,9 @@ function IronLog() {
         shareDay && (React.createElement(SessionShare, { data: data, unit: unit, dateIso: shareDay, saveState: saveState, lastSaved: lastSaved, storagePresent: storagePresent, onRetry: flushSave, onClose: () => { setShareDay(null); if (pendingCoffee) { setCoffeeAsk(pendingCoffee); setPendingCoffee(null); } } }))));
 }
 /* ---------------- Log view ---------------- */
-function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logDate, onChangeDate, dayTime, onChangeTime, restMarked, restKind, onRest, onUndoRest, onAdd, onSetDone, onRestPref, onLogBW, onLogCheckin, cardio, onAddCardio, updateCardio, removeCardio, onOpenWorkouts, onSuggest, hasTemplates, updateEx, removeEx, startRest, onShare, freezeAvail, onFreeze, activeSession, sessionFinished, onStartAnother, founder, onGate, onFinisher }) {
+function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logDate, onChangeDate, dayTime, onChangeTime, restMarked, restKind, onRest, onUndoRest, onAdd, onSetDone, onRestPref, onLogBW, onLogCheckin, cardio, onAddCardio, updateCardio, removeCardio, onOpenWorkouts, onSuggest, hasTemplates, updateEx, removeEx, startRest, onShare, freezeAvail, onFreeze, activeSession, sessionFinished, onStartAnother, founder, onGate, onFinisher, onGoWeek }) {
+    const openCh = (data.challenges || []).filter((c) => c.status === "open");
+    const dl = deloadSignal(data, today);
     const isWork = (s) => s.done && !s.warmup;
     const isBackdate = logDate !== today;
     const hasPreCheckin = !!(((data.checkins || {})[logDate]) || {}).pre;
@@ -832,11 +899,12 @@ function LogView({ dateLabel, exercises, todayExercises, unit, data, today, logD
         }
         return React.createElement("div", { key: "s" + s, style: { marginBottom: fin ? 12 : 0 } },
             header,
-            exs.map((ex, exI) => React.createElement(ExerciseCard, { key: ex.uid, ex: ex, unit: unit, hasPrev: exI > 0, prevName: exI > 0 ? exs[exI - 1].name : null, rec: (ex.timed || !hasPreCheckin) ? null : overloadFor(data, ex.id, ex.category, logDate, unit, ex.focus || dayFocus), dayFocus: dayFocus, restSecs: restFor(data, ex), injured: !!(data.injuries || {})[ex.category], injuryNote: (((data.injuries || {})[ex.category]) || {}).note || "", onDone: (set) => onSetDone(ex, set, restFor(data, ex)), onRestPref: (secs) => onRestPref(ex.id, secs), update: (fn) => updateEx(ex.uid, fn), remove: () => removeEx(ex.uid), founder: founder, onGate: onGate, onFinisher: onFinisher, finisherOk: !isBackdate && !data.finisherOff && (founder || ex.uid === firstFinUid), finTarget: finisherTarget(data, ex, unit) })),
+            exs.map((ex, exI) => React.createElement(ExerciseCard, { key: ex.uid, ex: ex, unit: unit, hasPrev: exI > 0, prevName: exI > 0 ? exs[exI - 1].name : null, rec: (ex.timed || !hasPreCheckin) ? null : overloadFor(data, ex.id, ex.category, logDate, unit, ex.focus || dayFocus), dayFocus: dayFocus, restSecs: restFor(data, ex), injured: !!(data.injuries || {})[ex.category], injuryNote: (((data.injuries || {})[ex.category]) || {}).note || "", onDone: (set) => onSetDone(ex, set, restFor(data, ex)), onRestPref: (secs) => onRestPref(ex.id, secs), update: (fn) => updateEx(ex.uid, fn), remove: () => removeEx(ex.uid), founder: founder, onGate: onGate, onFinisher: onFinisher, finisherOk: !isBackdate && !data.finisherOff && (founder || ex.uid === firstFinUid), finTarget: finisherTarget(data, ex, unit), challenges: openCh.filter((c) => c.exId === ex.id) })),
             cds.map((c) => React.createElement(CardioCard, { key: c.uid, c: c, unit: unit, last: cardioLastFor(data, c.id, logDate, unit), update: (fn) => updateCardio(c.uid, fn), remove: () => removeCardio(c.uid) })));
     }));
     return (React.createElement("div", null,
         React.createElement(DailyCard, { data: data, unit: unit, today: today, viewDate: logDate, dayLogged: dayHasWork(data.workouts[logDate]), restMarked: restMarked, restKind: restKind, onRest: onRest, onUndoRest: onUndoRest, loggedToday: dayHasWork(data.workouts[today]), freezeAvail: freezeAvail, onFreeze: onFreeze }),
+        dl.ready && dl.level === "red" && !isBackdate ? React.createElement("button", { style: S.deloadBanner, onClick: onGoWeek }, "\u26A0 Deload recommended \u2014 " + dl.count + " of 4 fatigue markers. See Week \u2192") : null,
         React.createElement("div", { style: { marginBottom: 12 } },
             React.createElement(DailyStrip, { data: data, unit: unit, logDate: logDate, onLogBW: onLogBW, onLogCheckin: onLogCheckin })),
         React.createElement("div", { style: S.dateRow },
@@ -1125,11 +1193,12 @@ function CoffeeAsk({ ask, onPick }) {
                 React.createElement("button", { style: { ...S.hiitCtlDark, flex: 1 }, onClick: () => onPick("asked") }, "Maybe later"),
                 React.createElement("button", { style: { ...S.hiitCtlDark, flex: 1 }, onClick: () => onPick("never") }, "Don't ask again")))));
 }
-function PRPop({ pop, unit, onClose }) {
+function PRPop({ pop, unit, onClose, onChallenge }) {
     const T = {
         weight: { eye: "🏆 New weight record", icon: "🏆", hot: true, lore: "The heaviest this bar has ever been for you. Forged, not found." },
         e1rm: { eye: "📈 New rep record", icon: "📈", lore: "Same iron, more reps — your estimated 1RM just moved." },
         reprange: { eye: "🎯 New " + pop.R + "RM", icon: "🎯", lore: "The heaviest you’ve ever moved for " + pop.R + "+ reps. Volume work, banked." },
+        challenge: { eye: "\u2694 Challenge beaten", icon: "\u2694", hot: true, lore: "You took down " + pop.from + "\u2019s " + pop.target + "." },
         volume: { eye: "≋ Session volume record", icon: "≋", lore: pop.vol + " " + unit + " on this lift today — more work than any session before." },
     }[pop.tier] || { eye: "Record", icon: "🏆", lore: "" };
     const hot = !!T.hot;
@@ -1140,7 +1209,8 @@ function PRPop({ pop, unit, onClose }) {
             React.createElement("div", { style: S.dropName }, pop.name),
             React.createElement("div", { style: { ...S.dropRarity, color: hot ? C.forge : C.chalk, borderColor: hot ? C.forge : C.lineSoft } }, pop.w, " ", unit, " × ", pop.reps),
             React.createElement("div", { style: S.dropLore }, T.lore),
-            React.createElement("button", { style: S.dropBtn, onClick: onClose }, "Rest ▶"))));
+            React.createElement("button", { style: S.dropBtn, onClick: onClose }, "Rest ▶"),
+            pop.tier !== "volume" && pop.exId && LIB_IDS.has(pop.exId) ? React.createElement("button", { style: { ...S.hiitCtlDark, width: "100%", marginTop: 8 }, onClick: () => onChallenge && onChallenge({ t: "pr", exId: pop.exId, name: pop.name, w: pop.wNum, unit, reps: pop.reps }) }, pop.tier === "challenge" ? "Challenge back \u2694" : "Challenge a friend \u2694") : null)));
 }
 /* ---------------- Session check-ins ---------------- */
 function DotScale({ label, value, onPick }) {
@@ -1527,7 +1597,7 @@ function CardioCard({ c, unit, last, update, remove }) {
                     React.createElement("input", { style: S.readout, inputMode: "numeric", value: c.level ? c.level : "", placeholder: "\u2013", onChange: (e) => setLvl(parseInt(e.target.value) || 0) }),
                     React.createElement("button", { style: S.stepBtn, onClick: () => setLvl((c.level || 0) + 1) }, "+")))))));
 }
-function ExerciseCard({ ex, unit, rec, restSecs, hasPrev, prevName, injured, injuryNote, onDone, onRestPref, update, remove, founder, onGate, dayFocus, onFinisher, finisherOk, finTarget }) {
+function ExerciseCard({ ex, unit, rec, restSecs, hasPrev, prevName, injured, injuryNote, onDone, onRestPref, update, remove, founder, onGate, dayFocus, onFinisher, finisherOk, finTarget, challenges }) {
     const effFocus = ex.focus || dayFocus || "strength";
     // Tap flips this lift to the other focus; flipping back to the day's default clears the override.
     const toggleFocus = () => update((e) => { const nf = effFocus === "volume" ? "strength" : "volume"; if (nf === (dayFocus || "strength")) delete e.focus; else e.focus = nf; });
@@ -1713,8 +1783,20 @@ function ExerciseCard({ ex, unit, rec, restSecs, hasPrev, prevName, injured, inj
                     React.createElement("button", { style: { ...S.typeOpt, ...(s.warmup ? S.typeWarmOn : {}) }, onClick: () => !s.warmup && toggleWarm(i) }, "Warm-up"),
                     ex.sets.length > 1 && (React.createElement("button", { style: S.removeSet, onClick: () => removeSet(i) }, "remove")))))))),
         React.createElement("button", { style: S.addSet, onClick: addSet }, "+ add set"),
+        (challenges || []).map((c) => {
+            const tried = ex.sets.find((x) => x.challengeId === c.id && x.done);
+            if (c.t === "pr")
+                return React.createElement("div", { key: c.id, style: S.chChip }, "\u2694 Beat " + c.from + ": " + chTarget(c, unit) + " \u2014 hit it on any set");
+            if (tried)
+                return React.createElement("div", { key: c.id, style: S.chChip }, "\u2694 vs " + c.from + ": " + tried.reps + " reps (target " + c.reps + ") \u2014 retry another day");
+            return React.createElement("div", { key: c.id, style: { ...S.finCard, borderColor: "#8FB3E8", background: "rgba(143,179,232,0.08)" } },
+                React.createElement("div", { style: { ...S.finEye, color: "#8FB3E8" } }, "\u2694 Challenge from " + c.from),
+                React.createElement("div", { style: S.finBig }, c.reps + " reps to failure @ " + fmt(inUnit({ weight: c.w, unit: c.unit }, unit)) + " " + unit),
+                React.createElement("div", { style: S.finSub }, "Beat " + c.reps + " to win. Best after your working sets."),
+                React.createElement("button", { style: { ...S.finGo, width: "100%", marginTop: 10, background: "#8FB3E8" }, onClick: () => onFinisher && onFinisher({ exUid: ex.uid, exId: ex.id, name: ex.name, w: c.w, unit: c.unit, rec: null, challenge: c }) }, "Take it \u2694"));
+        }),
         (() => {
-            const finSet = ex.sets.find((x) => x.finisher && x.done);
+            const finSet = ex.sets.find((x) => x.finisher && !x.challenge && x.done);
             if (finSet) {
                 const t = finTier(finSet.reps);
                 return React.createElement("div", { style: S.finDone }, "\u2692 Finisher \u00B7 " + finSet.reps + " reps @ " + fmt(inUnit(finSet, unit)) + " " + unit + (t ? " \u00B7 " + t.icon + " " + t.label : ""));
@@ -2040,7 +2122,7 @@ function LiftAnalytics({ data, exId, unit, today }) {
             : "Log a few weeks to see your trend")));
 }
 const FINISHER_GATE = { title: "The Finisher", blurb: "After your working sets, one optional set to failure at a fixed weight. Chase your rep record, climb Iron → Bronze → Silver → Gold → Forged, and level the weight up when you get there." };
-function FinisherRun({ run, unit, onComplete, onClose }) {
+function FinisherRun({ run, unit, onComplete, onClose, onChallenge }) {
     const [stage, setStage] = useState("go"); // go | count | reveal
     const [t0] = useState(() => Date.now());
     const [now, setNow] = useState(Date.now());
@@ -2083,7 +2165,7 @@ function FinisherRun({ run, unit, onComplete, onClose }) {
             React.createElement("div", { style: { ...S.hiitRound, marginTop: 6 } }, run.name + " · " + wShow + " " + unit),
             React.createElement("div", { style: S.hiitBig }, mmss(el)),
             React.createElement("div", { style: { ...S.hiitRound, maxWidth: 300, textAlign: "center", lineHeight: 1.5 } }, "To failure. The last clean rep counts."),
-            rec && rec.best ? React.createElement("div", { style: { ...S.finTarget, marginTop: 14 } }, "Record " + rec.best + (rec.last != null ? " · Last " + rec.last : "")) : React.createElement("div", { style: { ...S.finTarget, marginTop: 14 } }, "First attempt — set the bar"),
+            run.challenge ? React.createElement("div", { style: { ...S.finTarget, marginTop: 14 } }, "Beat " + run.challenge.from + ": " + run.challenge.reps + " reps") : rec && rec.best ? React.createElement("div", { style: { ...S.finTarget, marginTop: 14 } }, "Record " + rec.best + (rec.last != null ? " · Last " + rec.last : "")) : React.createElement("div", { style: { ...S.finTarget, marginTop: 14 } }, "First attempt — set the bar"),
             React.createElement("div", { style: S.hiitBtnRow },
                 React.createElement("button", { style: { ...S.dropBtn, padding: "18px 34px", fontSize: 18 }, onClick: () => { setSecs(el); setStage("count"); } }, "Done ✓"),
                 React.createElement("button", { style: S.hiitCtl, onClick: onClose }, "Cancel"))));
@@ -2104,6 +2186,17 @@ function FinisherRun({ run, unit, onComplete, onClose }) {
     }
     // reveal
     const done = shown >= res.reps;
+    if (res.challenge) {
+        const head = res.won ? "You beat " + res.from + "’s " + res.target + " 🔥" : res.draw ? "Dead heat with " + res.from : (res.target - res.reps) + " short of " + res.from + "’s " + res.target;
+        return (React.createElement("div", { style: { ...S.hiitOverlay, background: res.won ? "#2a1405" : C.iron2, padding: "24px 16px" } },
+            React.createElement("div", { style: S.hiitPhase }, "⚔ Challenge"),
+            React.createElement("div", { style: { ...S.hiitBig, color: done && res.won ? C.forge : "#fff", animation: done && res.won ? "flare 0.9s ease" : "none" } }, shown),
+            React.createElement("div", { style: S.hiitRound }, "reps @ " + wShow + " " + unit + " · target " + res.target),
+            done && React.createElement("div", { style: { ...S.finHead, color: res.won ? C.forge : C.chalk } }, head),
+            done && React.createElement("div", { style: { ...S.hiitBtnRow, marginTop: 22 } },
+                React.createElement("button", { style: S.dropBtn, onClick: () => onChallenge && onChallenge({ t: "fin", exId: res.exId, name: res.name, w: res.w, unit: res.unit, reps: res.reps }) }, res.won ? "Challenge back ⚔" : "Send a challenge ⚔"),
+                React.createElement("button", { style: S.hiitCtl, onClick: onClose }, "Done"))));
+    }
     const head = res.first ? (res.level > 1 ? "Level " + res.level + " — the bar is set" : "The bar is set")
         : res.record ? "+" + (res.reps - res.best) + " over your record 🔥"
             : res.matched ? "Matched your record"
@@ -2134,6 +2227,7 @@ function FinisherRun({ run, unit, onComplete, onClose }) {
         done && res.record && React.createElement("div", { style: { ...S.hiitRound, marginTop: 8, color: C.forge } }, "Forge-drop chance doubled this session"),
         done && React.createElement("div", { style: { ...S.hiitBtnRow, marginTop: 22 } },
             React.createElement("button", { style: S.dropBtn, onClick: () => tryShare(shareText, setHint) }, "Share ↗"),
+            LIB_IDS.has(run.exId) ? React.createElement("button", { style: S.hiitCtl, onClick: () => onChallenge && onChallenge({ t: "fin", exId: run.exId, name: run.name, w: res.w, unit: res.unit, reps: res.reps }) }, "Challenge ⚔") : null,
             React.createElement("button", { style: S.hiitCtl, onClick: onClose }, "Done")),
         hint ? React.createElement("div", { style: { ...S.shareHint, marginTop: 8 } }, hint) : null));
 }
@@ -2156,6 +2250,109 @@ function FinisherBoard({ data, unit, founder, onGate, onToggle }) {
                     React.createElement("span", { style: { ...S.pctChip, color: C.forge, background: "rgba(242,162,60,0.1)", borderColor: C.forgeDeep } }, fmt(inUnit({ weight: r.w, unit: r.unit }, unit)) + " " + unit),
                     React.createElement("span", { style: S.prBoardVal }, (r.top || 0) + " " + (t ? t.icon : "")));
             }))));
+}
+// ---- Weekly sets per muscle ----
+const MUSCLE_GATE = { title: "Muscle volume detail", blurb: "See each muscle’s 4-week trend and exactly which lifts are driving it — so you can fix lagging muscles with precision." };
+function MusclePanel({ data, unit, today, founder, onGate }) {
+    const [open, setOpen] = useState(null);
+    const ws = weekStartISO(today);
+    const cur = muscleSets(data, weekDates(ws));
+    const hist = founder ? [3, 2, 1].map((i) => muscleSets(data, weekDates(addDaysISO(ws, -7 * i))).sets) : [];
+    const f1 = (n) => (Math.round(n * 10) / 10).toString();
+    return (React.createElement("div", { style: S.anWrap },
+        React.createElement("div", { style: S.eyebrow }, "Hard sets per muscle · this week"),
+        React.createElement("div", { style: { ...S.hmNote, marginBottom: 10 } }, "Research points to ~10–20 hard sets per muscle per week for growth. Compounds count half-sets toward helper muscles."),
+        MUSCLES.map((m) => {
+            const n = cur.sets[m];
+            const b = setBand(n);
+            const isOpen = open === m;
+            return React.createElement("div", { key: m },
+                React.createElement("button", { style: S.msRow, onClick: () => (founder ? setOpen(isOpen ? null : m) : onGate(MUSCLE_GATE)) },
+                    React.createElement("span", { style: S.msName }, m),
+                    React.createElement("span", { style: S.msTrack },
+                        React.createElement("span", { style: S.msZone }),
+                        React.createElement("span", { style: { ...S.msFill, width: Math.min(100, (n / 25) * 100) + "%", background: b.color } })),
+                    React.createElement("span", { style: { ...S.msNum, color: b.color } }, f1(n)),
+                    React.createElement("span", { style: { ...S.msBand, color: b.color } }, b.label)),
+                isOpen && React.createElement("div", { style: S.msDetail },
+                    React.createElement("div", null, "4-wk: " + hist.map((h) => f1(h[m])).join(" → ") + " → " + f1(n) + " (now)"),
+                    React.createElement("div", { style: { marginTop: 4 } }, Object.entries(cur.contrib[m]).sort((a, c) => c[1] - a[1]).map(([k, v]) => k + " " + f1(v)).join(" · ") || "Nothing logged this week")));
+        }),
+        !founder && React.createElement("button", { style: S.founderCodeLink, onClick: () => onGate(MUSCLE_GATE) }, "⚒ Founders: 4-week trend + what’s driving each muscle")));
+}
+// ---- Deload ----
+const DELOAD_GATE = { title: "Fatigue markers", blurb: "See exactly which of the four fatigue markers are firing — strength trend, session RPE, readiness and loading streak — with the numbers behind each." };
+function DeloadPanel({ sig, founder, onGate }) {
+    if (!sig.ready)
+        return React.createElement("div", { style: { ...S.quietWeek, marginBottom: 18 } }, "🧪 Deload detector warms up after 4 weeks of logs (8+ sessions). You’re at " + sig.sessions + ".");
+    const col = { red: C.red, amber: C.forge, green: C.green }[sig.level];
+    const title = { red: "Deload recommended", amber: "Watch your fatigue", green: "Train on" }[sig.level];
+    return (React.createElement("div", { style: { ...S.anWrap, borderColor: col } },
+        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline" } },
+            React.createElement("div", { style: { ...S.lockTitle, marginTop: 0, color: col } }, title),
+            React.createElement("div", { style: { fontFamily: mono, fontSize: 12, color: C.dim } }, sig.count + " / 4 markers")),
+        React.createElement("div", { style: { ...S.lockBlurb, marginTop: 6 } }, DELOAD_ADVICE[sig.level]),
+        founder
+            ? React.createElement("div", { style: { marginTop: 10 } }, sig.markers.map((m) => React.createElement("div", { key: m.key, style: S.lineItem },
+                React.createElement("span", { style: { ...S.lineKey, color: m.on ? col : C.faint } }, (m.on ? "● " : "○ ") + m.label),
+                React.createElement("span", { style: { ...S.lineVal, fontSize: 12, color: C.dim, maxWidth: "62%" } }, m.detail))))
+            : React.createElement("button", { style: S.founderCodeLink, onClick: () => onGate(DELOAD_GATE) }, "⚒ Founders: see which markers are firing")));
+}
+// ---- Challenges ----
+function ChallengesPanel({ data, unit, onPaste, onAddLift, onDismiss }) {
+    const [txt, setTxt] = useState("");
+    const [msg, setMsg] = useState(null);
+    const list = (data.challenges || []).slice(0, 8);
+    return (React.createElement("div", { style: S.anWrap },
+        React.createElement("div", { style: S.eyebrow }, "⚔ Challenges"),
+        list.length === 0 && React.createElement("div", { style: { ...S.hmNote, marginBottom: 10 } }, "Beat a PR or a Finisher, then tap “Challenge a friend”. Links friends send you land here."),
+        list.map((c) => React.createElement("div", { key: c.id, style: S.prBoardRow },
+            React.createElement("span", { style: { ...S.prBoardName, whiteSpace: "normal" } },
+                React.createElement("span", { style: { color: "#8FB3E8", fontWeight: 600 } }, c.from), " · " + c.name + " · " + (c.t === "fin" ? c.reps + " reps to failure @ " + fmt(inUnit({ weight: c.w, unit: c.unit }, unit)) + " " + unit : chTarget(c, unit)),
+                c.best ? React.createElement("span", { style: { color: C.faint } }, " · your best " + c.best) : null),
+            c.status === "won"
+                ? React.createElement("span", { style: { ...S.pctChip } }, "Won ✓")
+                : React.createElement("button", { style: { ...S.typeOpt, color: C.forge, borderColor: C.forgeDeep }, onClick: () => onAddLift(c) }, "Add to today"),
+            React.createElement("button", { style: S.iconBtn, "aria-label": "Remove challenge", onClick: () => onDismiss(c.id) }, "✕"))),
+        React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 10 } },
+            React.createElement("input", { style: { ...S.search, margin: 0, flex: 1, fontSize: 13 }, placeholder: "Paste a challenge link", value: txt, onChange: (e) => { setTxt(e.target.value); setMsg(null); } }),
+            React.createElement("button", { style: S.bwSave, onClick: () => { const ok = onPaste(txt); setMsg(ok ? null : "That link isn’t a valid IRONLOG challenge."); if (ok) setTxt(""); } }, "Add")),
+        msg && React.createElement("div", { style: S.bkpErr }, msg)));
+}
+function ChallengeIncoming({ ch, unit, onAdd, onClose }) {
+    const [hint, setHint] = useState("");
+    const ios = isIOSBrowser();
+    const copy = async () => { try { await navigator.clipboard.writeText(challengeLink(ch)); setHint("Copied — paste it in Week → Challenges in your home-screen app."); } catch (e) { setHint("Copy blocked — long-press the link in your messages instead."); } };
+    return (React.createElement("div", { style: { ...S.sheetBackdrop, zIndex: 56 } },
+        React.createElement("div", { style: { ...S.dropCard, textAlign: "center", borderColor: "#8FB3E8" }, onClick: (e) => e.stopPropagation() },
+            React.createElement("div", { style: { ...S.dropEyebrow, color: "#8FB3E8" } }, "⚔ Challenge from " + ch.from),
+            React.createElement("div", { style: { ...S.dropName, marginTop: 14 } }, ch.name),
+            React.createElement("div", { style: { ...S.dropRarity, color: C.chalk, borderColor: "#8FB3E8" } }, ch.t === "fin" ? ch.reps + " reps to failure @ " + fmt(inUnit({ weight: ch.w, unit: ch.unit }, unit)) + " " + unit : chTarget(ch, unit)),
+            React.createElement("div", { style: S.dropLore }, ch.t === "fin" ? "A Finisher: one set to failure at this weight. Beat " + ch.reps + " clean reps to win." : "Hit this weight for at least " + ch.reps + " reps on any set to win."),
+            ios && React.createElement("div", { style: { ...S.lockBlurb, marginBottom: 12 } }, "On iPhone, your home-screen IRONLOG is separate from Safari. Using the app? Copy this link and paste it in Week → Challenges there."),
+            ios && React.createElement("button", { style: { ...S.hiitCtlDark, width: "100%", marginBottom: 8 }, onClick: copy }, "Copy link"),
+            React.createElement("button", { style: S.dropBtn, onClick: onAdd }, "Add to today’s session"),
+            React.createElement("button", { style: { ...S.hiitCtlDark, width: "100%", marginTop: 8 }, onClick: onClose }, "Later — it’s saved in Week"),
+            hint && React.createElement("div", { style: { ...S.shareHint, marginTop: 8 } }, hint))));
+}
+function ChallengeShare({ payload, unit, handle, onSaveHandle, onClose }) {
+    const [name, setName] = useState(handle || "");
+    const [hint, setHint] = useState("");
+    const clean = name.replace(/[\u0000-\u001f\u007f<>]/g, "").trim().slice(0, 24);
+    const c = { ...payload, from: clean || "A friend" };
+    const link = challengeLink(c);
+    const what = payload.t === "fin" ? c.reps + " reps to failure @ " + fmt(inUnit({ weight: c.w, unit: c.unit }, unit)) + " " + unit : chTarget(c, unit);
+    const text = "⚔ " + c.from + " challenges you on IRONLOG: " + what + " — " + payload.name + ". Think you can beat it? " + link;
+    return (React.createElement("div", { style: { ...S.sheetBackdrop, zIndex: 57 }, onClick: onClose },
+        React.createElement("div", { style: { ...S.dropCard, textAlign: "left" }, onClick: (e) => e.stopPropagation() },
+            React.createElement("div", { style: { ...S.dropEyebrow, color: "#8FB3E8" } }, "⚔ Challenge a friend"),
+            React.createElement("div", { style: { ...S.dropName, fontSize: 20, marginTop: 10 } }, payload.name),
+            React.createElement("div", { style: { ...S.finBig, marginTop: 4 } }, what),
+            React.createElement("label", { style: { ...S.fieldLabel, marginTop: 14 } }, "Your name on the challenge"),
+            React.createElement("input", { style: { ...S.search, margin: 0, width: "100%" }, maxLength: 24, placeholder: "e.g. Ben", value: name, onChange: (e) => setName(e.target.value) }),
+            React.createElement("button", { style: { ...S.dropBtn, marginTop: 14 }, onClick: () => { if (clean && clean !== handle) onSaveHandle(clean); tryShare(text, setHint); } }, "Send challenge ↗"),
+            React.createElement("button", { style: { ...S.hiitCtlDark, width: "100%", marginTop: 8 }, onClick: onClose }, "Close"),
+            hint && React.createElement("div", { style: { ...S.shareHint, marginTop: 8 } }, hint))));
 }
 function ProgressView({ data, unit, progId, setProgId, onSetInjury, founder, onGate }) {
     const [metric, setMetric] = useState("e1rm"); // e1rm | vol
@@ -2898,6 +3095,189 @@ function finisherOutcome(prev, reps, w, unit, name) {
     const nextW = leveled ? r1(w + STEP[unit]) : w;
     return { reps, best, last, level, first, record, matched, tier, tierUp, leveled, nextLevel: leveled ? level + 1 : level, nextW, w, unit, name };
 }
+
+// ================= Weekly hard sets per muscle =================
+// Each working set counts 1 set for the primary muscle(s) and 0.5 for secondaries
+// (the fractional-set convention used in volume research). Warm-ups never count;
+// Finishers do — a set to failure is a hard set.
+const MUSCLES = ["Chest", "Back", "Shoulders", "Biceps", "Triceps", "Quads", "Hamstrings", "Glutes", "Calves", "Core"];
+const MM = (p, sec) => { const o = {}; (p || []).forEach((m) => { o[m] = 1; }); (sec || []).forEach((m) => { if (!o[m]) o[m] = 0.5; }); return o; };
+const PRESS = MM(["Chest"], ["Triceps", "Shoulders"]), FLY = MM(["Chest"]), VPULL = MM(["Back"], ["Biceps"]);
+const SQUAT = MM(["Quads"], ["Glutes"]), OHPM = MM(["Shoulders"], ["Triceps"]), DELT = MM(["Shoulders"]);
+const CURL = MM(["Biceps"]), TRI = MM(["Triceps"]), CORE = MM(["Core"]), CALF = MM(["Calves"]);
+const MUSCLE_MAP = {
+    bench: PRESS, incbench: PRESS, dbbench: PRESS, incdb: PRESS, mchest: PRESS, smithbench: PRESS, incmachine: PRESS, pushup: PRESS,
+    fly: FLY, cross: FLY, pecdeck: FLY, cablefly: FLY, cdip: MM(["Chest"], ["Triceps"]),
+    dead: MM(["Hamstrings", "Glutes"], ["Back", "Quads"]), rack: MM(["Back"], ["Glutes", "Hamstrings"]),
+    row: VPULL, tbar: VPULL, dbrow: VPULL, cablerow: VPULL, machinerow: VPULL, isorow: VPULL,
+    pullup: VPULL, chin: VPULL, latpd: VPULL, assistpull: VPULL, machpd: VPULL, straightarm: MM(["Back"]),
+    facepull: MM(["Shoulders"], ["Back"]), machshrug: MM(["Back"]),
+    squat: SQUAT, frontsq: SQUAT, hacksquat: SQUAT, smithsquat: SQUAT, pendulum: SQUAT, legpress: SQUAT, goblet: SQUAT, sllegpress: SQUAT,
+    lunge: SQUAT, bss: SQUAT, legext: MM(["Quads"]), sllegext: MM(["Quads"]),
+    rdl: MM(["Hamstrings"], ["Glutes", "Back"]), legcurl: MM(["Hamstrings"]), seatedlegcurl: MM(["Hamstrings"]), sllegcurl: MM(["Hamstrings"]),
+    hipthrust: MM(["Glutes"], ["Hamstrings"]), glutekick: MM(["Glutes"]), abduction: MM(["Glutes"]), adduction: MM([], ["Hamstrings"]),
+    calf: CALF, seatedcalf: CALF, standcalf: CALF,
+    ohp: OHPM, seateddb: OHPM, arnold: OHPM, machshoulder: OHPM, smithohp: OHPM, pushpress: MM(["Shoulders"], ["Triceps", "Quads"]),
+    latraise: DELT, frontraise: DELT, cablelat: DELT, machlat: DELT, upright: DELT, reardelt: MM(["Shoulders"], ["Back"]), revpec: MM(["Shoulders"], ["Back"]),
+    curl: CURL, dbcurl: CURL, hammer: CURL, preacher: CURL, cablecurl: CURL, machcurl: CURL, machcurl1: CURL, machpreacher: CURL,
+    pushdown: TRI, ohext: TRI, skull: TRI, machtri: TRI, ropepushdown: TRI, cgbench: MM(["Triceps"], ["Chest"]), dip: MM(["Triceps"], ["Chest"]), machdip: MM(["Triceps"], ["Chest"]),
+    plank: CORE, hlr: CORE, cablecrunch: CORE, abwheel: CORE, twist: CORE,
+    pclean: MM([], ["Hamstrings", "Glutes", "Back", "Quads"]), cj: MM([], ["Quads", "Glutes", "Shoulders", "Back"]), snatch: MM([], ["Quads", "Glutes", "Shoulders", "Back"]),
+};
+// Custom exercises fall back to their category.
+const CAT_MUSCLES = { Chest: FLY, Back: MM(["Back"]), Shoulders: DELT, Arms: MM([], ["Biceps", "Triceps"]), Legs: MM([], ["Quads", "Hamstrings", "Glutes"]), Core: CORE, Olympic: MM([], ["Quads", "Back"]) };
+const musclesFor = (ex) => MUSCLE_MAP[ex.id] || CAT_MUSCLES[ex.category] || {};
+function muscleSets(data, days) {
+    const sets = {}, contrib = {};
+    MUSCLES.forEach((m) => { sets[m] = 0; contrib[m] = {}; });
+    days.forEach((d) => {
+        const day = data.workouts[d];
+        if (!day)
+            return;
+        (day.exercises || []).forEach((e) => {
+            const n = e.sets.filter(isWorkDone).length;
+            if (!n)
+                return;
+            const mm = musclesFor(e);
+            Object.keys(mm).forEach((m) => {
+                sets[m] += n * mm[m];
+                contrib[m][e.name] = (contrib[m][e.name] || 0) + n * mm[m];
+            });
+        });
+    });
+    return { sets, contrib };
+}
+// Bands from the hypertrophy dose-response literature (~10–20 hard sets/muscle/week).
+const setBand = (n) => n <= 0 ? { k: "none", label: "not trained", color: C.faint }
+    : n < 10 ? { k: "under", label: "below range", color: C.forge }
+        : n <= 20 ? { k: "prod", label: "productive", color: C.green }
+            : { k: "high", label: "high — watch recovery", color: C.red };
+
+// ================= Deload detector =================
+// Four independent fatigue markers. Strength trend compares STRENGTH-focus sessions
+// only, so a volume phase can never read as decline.
+function deloadSignal(data, today) {
+    const worked = Object.keys(data.workouts).filter((d) => d <= today && dayHasWork(data.workouts[d])).sort();
+    if (worked.length < 8 || worked[0] > addDaysISO(today, -27))
+        return { ready: false, sessions: worked.length };
+    const avg = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+    const r0 = addDaysISO(today, -13), p0 = addDaysISO(today, -27);
+    // A. strength trend, like-for-like
+    const best = { recent: {}, prior: {} };
+    Object.keys(data.workouts).forEach((d) => {
+        if (d < p0 || d > today)
+            return;
+        const win = d >= r0 ? "recent" : "prior";
+        (data.workouts[d].exercises || []).forEach((e) => {
+            const work = e.sets.filter((st) => isWorkDone(st) && !st.finisher && (st.reps || 0) > 0 && inUnit(st, "kg") > 0);
+            if (!work.length)
+                return;
+            const topW = Math.max(...work.map((st) => inUnit(st, "kg")));
+            const minR = Math.min(...work.filter((st) => inUnit(st, "kg") === topW).map((st) => st.reps));
+            if (sessionFocus(data, d, e, minR) !== "strength")
+                return;
+            const e1 = Math.max(...work.map((st) => e1rm(st, "kg")));
+            if (e1 > (best[win][e.id] || 0))
+                best[win][e.id] = e1;
+        });
+    });
+    const both = Object.keys(best.recent).filter((id) => best.prior[id]);
+    const down = both.filter((id) => best.recent[id] < best.prior[id] * 0.98);
+    const mA = both.length >= 3 && down.length / both.length >= 0.5;
+    // B. session RPE rising / very high
+    const ci = data.checkins || {};
+    const rpes = (a, b) => Object.keys(ci).filter((d) => d >= a && d <= b && ci[d].post && ci[d].post.rpe).map((d) => ci[d].post.rpe);
+    const rR = rpes(r0, today), rP = rpes(p0, addDaysISO(r0, -1));
+    const mB = (rR.length >= 2 && rP.length >= 2 && avg(rR) >= avg(rP) + 1) || (rR.length >= 3 && avg(rR) >= 8.5);
+    // C. readiness low / falling
+    const rd = (a, b) => Object.keys(ci).filter((d) => d >= a && d <= b && ci[d].pre).map((d) => readinessScore(ci[d].pre));
+    const x7 = rd(addDaysISO(today, -6), today), xP = rd(p0, addDaysISO(today, -7));
+    const mC = (x7.length >= 3 && avg(x7) < 50) || (x7.length >= 2 && xP.length >= 3 && avg(x7) <= avg(xP) - 10);
+    // D. unbroken loading: consecutive completed weeks at >= 70% of usual hard sets
+    const curWS = weekStartISO(today);
+    const wk = [];
+    for (let i = 1; i <= 12; i++) {
+        const ms = muscleSets(data, weekDates(addDaysISO(curWS, -7 * i))).sets;
+        wk.push(Object.values(ms).reduce((a, b) => a + b, 0));
+    }
+    const nz = wk.filter((x) => x > 0);
+    const A = nz.length ? avg(nz) : 0;
+    let run = 0;
+    for (const x of wk) {
+        if (A > 0 && x >= 0.7 * A)
+            run++;
+        else
+            break;
+    }
+    const mD = run >= 6;
+    const f1 = (n) => Math.round(n * 10) / 10;
+    const markers = [
+        { key: "strength", on: mA, label: "Strength dipping", detail: both.length >= 3 ? down.length + " of " + both.length + " lifts down 2%+ on strength days (last 14 days vs prior 14)" : "Not enough repeated strength lifts to judge" },
+        { key: "rpe", on: mB, label: "Sessions feel harder", detail: rR.length ? "Avg session RPE " + f1(avg(rR)) + (rP.length ? " (was " + f1(avg(rP)) + ")" : "") : "Log session RPE at Finish to track this" },
+        { key: "ready", on: mC, label: "Readiness falling", detail: x7.length ? "7-day readiness " + Math.round(avg(x7)) + "%" + (xP.length ? " (was " + Math.round(avg(xP)) + "%)" : "") : "Check in before sessions to track this" },
+        { key: "load", on: mD, label: "Unbroken loading", detail: run + " straight week" + (run === 1 ? "" : "s") + " of full training load" },
+    ];
+    const count = markers.filter((m) => m.on).length;
+    return { ready: true, markers, count, level: count >= 3 ? "red" : count === 2 ? "amber" : "green" };
+}
+const DELOAD_ADVICE = {
+    red: "Deload recommended: one week at about half your usual sets, same weights, finishing every set 3+ reps short of failure. Skip Finishers. You’ll come back stronger.",
+    amber: "Watch it: keep your weights, trim a set or two per lift and prioritise sleep this week.",
+    green: "Train on — no meaningful fatigue signals.",
+};
+
+// ================= Challenge-a-friend links =================
+// No server: the whole challenge lives in the URL. Everything decoded is untrusted —
+// validated against the exercise library and hard numeric limits, rendered as text only.
+const CH_BASE = "https://ironlogv1.github.io/Ironlog-app/";
+const LIB_IDS = new Set(LIB.map((x) => x.id));
+function encodeChallenge(c) {
+    const o = { v: 1, t: c.t, e: c.exId, w: c.w, u: c.unit, r: c.reps, f: c.from };
+    return btoa(unescape(encodeURIComponent(JSON.stringify(o)))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+const challengeLink = (c) => CH_BASE + "?c=" + encodeChallenge(c);
+function decodeChallenge(str) {
+    try {
+        let t = String(str || "").trim();
+        const m = t.match(/[?&]c=([A-Za-z0-9_-]+)/);
+        if (m)
+            t = m[1];
+        if (!/^[A-Za-z0-9_-]{8,400}$/.test(t))
+            return null;
+        let b = t.replace(/-/g, "+").replace(/_/g, "/");
+        while (b.length % 4)
+            b += "=";
+        const o = JSON.parse(decodeURIComponent(escape(atob(b))));
+        if (!o || o.v !== 1 || (o.t !== "fin" && o.t !== "pr"))
+            return null;
+        if (typeof o.e !== "string" || !LIB_IDS.has(o.e))
+            return null;
+        const w = Number(o.w), r = Number(o.r);
+        if (!(w > 0 && w < 1000) || !(Number.isInteger(r) && r >= 1 && r <= 200) || (o.u !== "kg" && o.u !== "lb"))
+            return null;
+        const lib = LIB.find((x) => x.id === o.e);
+        if (o.t === "fin" && !finisherEligible(lib))
+            return null;
+        let f = typeof o.f === "string" ? o.f : "";
+        f = f.replace(/[\u0000-\u001f\u007f<>]/g, "").trim().slice(0, 24) || "A friend";
+        return { t: o.t, exId: o.e, name: lib.name, category: lib.category, w: r1(w), unit: o.u, reps: r, from: f, key: t };
+    }
+    catch (e) {
+        return null;
+    }
+}
+const isIOSBrowser = () => {
+    try {
+        const ua = navigator.userAgent || "";
+        const ios = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+        const standalone = window.navigator.standalone === true || (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
+        return ios && !standalone;
+    }
+    catch (e) {
+        return false;
+    }
+};
+const chTarget = (c, unit) => fmt(inUnit({ weight: c.w, unit: c.unit }, unit)) + " " + unit + " × " + c.reps;
 // CD6 — scarcity. One limited-edition badge per calendar month. Earn it inside
 // the month or it is gone for good — the cabinet keeps the gap.
 const MONTH_BADGE_POOL = [
@@ -3366,7 +3746,8 @@ function ShareActions({ text }) {
         React.createElement("div", { style: S.shareHint }, hint)));
 }
 /* ---------------- Week summary (a shareable screen) ---------------- */
-function WeekView({ data, unit, today, onShareMonth }) {
+function WeekView({ data, unit, today, onShareMonth, founder, onGate, onPaste, onAddLift, onDismiss }) {
+    const chPanel = React.createElement(ChallengesPanel, { data: data, unit: unit, onPaste: onPaste, onAddLift: onAddLift, onDismiss: onDismiss });
     const ws = weekStartISO(today);
     const days = weekDates(ws);
     const st = rangeStats(data, unit, days);
@@ -3383,7 +3764,8 @@ function WeekView({ data, unit, today, onShareMonth }) {
         return (React.createElement("div", { style: S.empty },
             React.createElement("div", { style: S.emptyMark }, "\u25A2"),
             React.createElement("div", { style: S.emptyTitle }, "Quiet week so far"),
-            React.createElement("div", { style: S.emptySub }, "Log a session and your week takes shape here.")));
+            React.createElement("div", { style: S.emptySub }, "Log a session and your week takes shape here."),
+            React.createElement("div", { style: { textAlign: "left", marginTop: 24 } }, chPanel)));
     const shareText = `IRONLOG — week of ${rangeLabel}\n` +
         `${st.sessions} gym visit${st.sessions === 1 ? "" : "s"} · ${fmt(st.volume)} ${unit} moved\n` +
         `${st.sets} working sets · ${st.reps} reps\n` +
@@ -3392,6 +3774,9 @@ function WeekView({ data, unit, today, onShareMonth }) {
         (equiv ? `That's ${equiv} of total volume.` : "");
     return (React.createElement("div", null,
         React.createElement(ForgePanel, { fs: fs, unit: unit, today: today, data: data }),
+        React.createElement(DeloadPanel, { sig: deloadSignal(data, today), founder: founder, onGate: onGate }),
+        React.createElement(MusclePanel, { data: data, unit: unit, today: today, founder: founder, onGate: onGate }),
+        chPanel,
         st.sessions === 0 && (React.createElement("div", { style: S.quietWeek }, "No sessions logged this week yet \u2014 your streak holds as long as you train once before the week is out.")),
         st.sessions > 0 && (React.createElement(React.Fragment, null,
             React.createElement("div", { style: S.shareCard },
@@ -4380,6 +4765,16 @@ Object.assign(S, {
     finRungOn: { opacity: 1, borderColor: C.forge, background: "rgba(242,162,60,0.12)" },
     finRungL: { fontFamily: cond, fontWeight: 700, fontSize: 11, letterSpacing: 0.8, textTransform: "uppercase", color: C.chalk, marginTop: 2 },
     finRungN: { fontFamily: mono, fontSize: 10, color: C.faint },
+    msRow: { width: "100%", display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", padding: "6px 0", cursor: "pointer", textAlign: "left" },
+    msName: { width: 82, flex: "none", fontFamily: cond, fontWeight: 700, fontSize: 12.5, letterSpacing: 0.6, textTransform: "uppercase", color: C.chalk },
+    msTrack: { position: "relative", flex: 1, height: 8, background: C.iron, borderRadius: 4, overflow: "hidden" },
+    msZone: { position: "absolute", left: "40%", width: "40%", top: 0, bottom: 0, background: "rgba(63,168,106,0.16)" },
+    msFill: { position: "absolute", left: 0, top: 0, bottom: 0, borderRadius: 4 },
+    msNum: { width: 34, flex: "none", textAlign: "right", fontFamily: mono, fontWeight: 700, fontSize: 12.5 },
+    msBand: { width: 74, flex: "none", fontFamily: cond, fontSize: 10, letterSpacing: 0.5, textTransform: "uppercase", textAlign: "right" },
+    msDetail: { fontFamily: body, fontSize: 12, color: C.dim, padding: "2px 0 10px 90px", lineHeight: 1.45 },
+    deloadBanner: { width: "100%", textAlign: "left", marginBottom: 12, background: "rgba(213,64,43,0.12)", border: `1px solid ${C.red}`, color: C.chalk, borderRadius: 10, padding: "10px 12px", fontFamily: cond, fontWeight: 700, fontSize: 13, letterSpacing: 0.3, cursor: "pointer" },
+    chChip: { marginTop: 10, border: "1px dashed #8FB3E8", color: "#8FB3E8", borderRadius: 10, padding: "8px 12px", fontFamily: cond, fontWeight: 700, fontSize: 13, letterSpacing: 0.3 },
     lockCard: { width: "100%", textAlign: "left", margin: "0 0 22px", background: "linear-gradient(180deg, rgba(242,162,60,0.08), rgba(242,162,60,0.02))", border: `1.5px dashed ${C.forgeDeep}`, borderRadius: 14, padding: "14px 16px", cursor: "pointer" },
     lockTag: { fontFamily: cond, fontWeight: 700, fontSize: 11, letterSpacing: 1.5, textTransform: "uppercase", color: C.forge },
     lockTitle: { fontFamily: cond, fontWeight: 700, fontSize: 18, color: C.chalk, marginTop: 4, letterSpacing: 0.4 },
